@@ -1,0 +1,23 @@
+# Environment
+.env
+.env.local
+*.local
+
+# Frontend
+web/node_modules/
+web/dist/
+web/coverage/
+
+# Go
+server/bin/
+server/coverage.out
+server/*.exe
+
+# Editors and OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Runtime
+*.log
