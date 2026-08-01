@@ -23,11 +23,11 @@ var (
 	ErrValidation         = errors.New("validation error")
 )
 
-var defaultSources = []string{"微信", "支付宝", "美团", "抖音", "银行卡", "交通", "其他"}
+var defaultSources = []string{"微信", "支付宝", "美团", "京东", "抖音", "银行卡", "交通", "其他"}
 var passwordLetter = regexp.MustCompile(`[A-Za-z]`)
 var passwordDigit = regexp.MustCompile(`[0-9]`)
 var validUsername = regexp.MustCompile(`^[\p{L}\p{N}_-]{3,32}$`)
-var defaultDestinations = []string{"支付宝基金", "A股", "港美股", "现金"}
+var defaultDestinations = []string{"现金", "债券类基金", "纳斯达克100指数（QDII）", "标普500指数（QDII）"}
 
 type App struct {
 	Store      *repository.Store
