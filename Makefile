@@ -1,10 +1,19 @@
-.PHONY: db-up db-down dev-web dev-api test test-web test-api build migrate
+.PHONY: db-up db-down dev-web dev-api test test-web test-api build migrate docker-up docker-down docker-logs
 
 db-up:
-	docker compose up -d mysql
+	docker compose -f docker-compose.dev.yml up -d mysql
 
 db-down:
+	docker compose -f docker-compose.dev.yml down
+
+docker-up:
+	docker compose up -d --build
+
+docker-down:
 	docker compose down
+
+docker-logs:
+	docker compose logs -f --tail=100
 
 dev-web:
 	cd web && npm run dev

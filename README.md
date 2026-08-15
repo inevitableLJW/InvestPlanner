@@ -33,7 +33,56 @@ npm run dev
 
 浏览器访问 `http://localhost:5173`。Vite 开发服务器将 `/api` 代理到 `http://localhost:8080`。
 
-根目录 `Makefile` 也提供 `make db-up`、`make server`、`make web`、`make test` 和 `make build`。
+根目录 `Makefile` 也提供 `make db-up`、`make dev-api`、`make dev-web`、`make test` 和 `make build`。
+
+## Docker 一键部署
+
+整套应用由三个容器组成：`web`（唯一对外入口）、`api` 和 `mysql`。数据库端口不会暴露到宿主机，前端通过同源 `/api` 访问后端。
+
+```bash
+cp .env.docker.example .env
+# 编辑 .env：至少修改 APP_URL、MYSQL_DATA_DIR 和 MYSQL_PASSWORD
+docker compose up -d --build
+docker compose ps
+```
+
+访问 `.env` 中的 `APP_URL`（默认端口 `3000`）。升级时执行：
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+应用数据仅存放在 `MYSQL_DATA_DIR`；删除或重建容器不会删除该目录。不要使用 `docker compose down -v`，升级或迁移前应先备份数据库。
+
+## TrueNAS SCALE 25.10.1
+
+推荐先在 TrueNAS 创建一个应用数据集，例如 `/mnt/tank/apps/invest-planner/mysql`，Dataset Preset 选择 **Apps**，不要把数据库直接放进 SMB 共享目录。若容器日志提示 `permission denied`，请先检查该数据集的 Apps ACL。然后选择以下任一部署方式：
+
+### 方式一：通过 SSH 从源码构建
+
+将仓库克隆到 NAS 数据集，复制并修改 `.env.docker.example`，然后执行上面的 `docker compose up -d --build`。这种方式不依赖容器仓库权限。
+
+### 方式二：在 TrueNAS 界面安装
+
+1. 推送本仓库后，确认 GitHub Actions 的 `Container images` 工作流成功，并将两个 GHCR Package 设置为 Public。
+2. 打开 **Apps > Discover Apps > 右上角菜单 > Install via YAML**，应用名填写 `invest-planner`。
+3. 粘贴 [`deploy/truenas-compose.yml`](deploy/truenas-compose.yml) 的内容。
+4. 全局替换模板中的三个值：`REPLACE_WITH_POOL`、`REPLACE_WITH_TRUENAS_IP`、`REPLACE_WITH_A_LONG_RANDOM_PASSWORD`。密码建议只使用至少 32 位的 ASCII 字母和数字，避免 Compose 将 `$` 等字符当作变量。
+5. 保存，等待三个容器健康后访问 `http://TRUENAS_IP:3000`。
+
+模板会拉取 `linux/amd64` 或 `linux/arm64` 的 GHCR 镜像，适配常见 TrueNAS 主机架构。端口 `3000` 如被占用，可同时修改 `web.ports` 左侧端口和 `WEB_ORIGIN` 中的端口。
+
+如果通过 HTTPS 反向代理对外提供服务，请把 `WEB_ORIGIN`（或 `.env` 中的 `APP_URL`）改为精确的 `https://域名`，并设置 `COOKIE_SECURE=true`。不要在公网直接暴露 MySQL 或本项目的 HTTP 端口。
+
+首次初始化后再修改 `MYSQL_PASSWORD` 不会自动修改数据库内已有账号密码；如需轮换密码，请先在 MySQL 中修改账号，再同步更新 Compose 配置。
+
+健康检查：入口为 `/healthz`，API 容器为 `http://api:8080/healthz`。排障可查看：
+
+```bash
+docker compose ps
+docker compose logs --tail=100 mysql api web
+```
 
 ## 环境变量
 
@@ -45,7 +94,7 @@ npm run dev
 - `COOKIE_SECURE=true`：生产环境必须开启，并只通过 HTTPS 提供服务。
 - `SESSION_TTL`：Go duration 格式的服务端会话有效期，例如 `168h`。
 
-前端变量见 `web/.env.example`，生产部署可将 `VITE_API_BASE` 指向同源 `/api/v1`。
+前端变量见 `web/.env.example`，生产部署默认使用同源 `/api/v1`；如需覆盖可设置 `VITE_API_BASE_URL`。
 
 不要提交 `.env`、真实 DSN、密码或会话令牌。日志和错误响应不会输出密码、密码哈希、原始会话令牌或其他用户的计划数据。
 

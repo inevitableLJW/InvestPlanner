@@ -1,3 +1,5 @@
+# TrueNAS SCALE 25.10: Apps > Discover Apps > menu > Install via YAML.
+# Before saving, replace all three REPLACE_* values below.
 name: invest-planner
 
 services:
@@ -5,13 +7,13 @@ services:
     image: mysql:8.4
     restart: unless-stopped
     environment:
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-invest_planner}
-      MYSQL_USER: ${MYSQL_USER:-invest_planner}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}
+      MYSQL_DATABASE: invest_planner
+      MYSQL_USER: invest_planner
+      MYSQL_PASSWORD: REPLACE_WITH_A_LONG_RANDOM_PASSWORD
       MYSQL_RANDOM_ROOT_PASSWORD: "yes"
-      TZ: ${TZ:-Asia/Shanghai}
+      TZ: Asia/Shanghai
     volumes:
-      - ${MYSQL_DATA_DIR:-./data/mysql}:/var/lib/mysql
+      - /mnt/REPLACE_WITH_POOL/apps/invest-planner/mysql:/var/lib/mysql
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u\"$${MYSQL_USER}\" -p\"$${MYSQL_PASSWORD}\" --silent"]
       interval: 10s
@@ -22,19 +24,17 @@ services:
       - backend
 
   api:
-    image: ${API_IMAGE:-invest-planner-api:local}
-    build:
-      context: .
-      dockerfile: deploy/api.Dockerfile
+    image: ghcr.io/inevitableljw/invest-planner-api:latest
+    pull_policy: always
     restart: unless-stopped
     environment:
       APP_ENV: production
       HTTP_ADDR: :8080
-      MYSQL_DSN: ${MYSQL_USER:-invest_planner}:${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}@tcp(mysql:3306)/${MYSQL_DATABASE:-invest_planner}?charset=utf8mb4&parseTime=True&loc=Local
-      WEB_ORIGIN: ${APP_URL:?set APP_URL in .env, for example http://192.168.1.10:3000}
-      COOKIE_SECURE: ${COOKIE_SECURE:-false}
-      SESSION_TTL: ${SESSION_TTL:-168h}
-      TZ: ${TZ:-Asia/Shanghai}
+      MYSQL_DSN: invest_planner:REPLACE_WITH_A_LONG_RANDOM_PASSWORD@tcp(mysql:3306)/invest_planner?charset=utf8mb4&parseTime=True&loc=Local
+      WEB_ORIGIN: http://REPLACE_WITH_TRUENAS_IP:3000
+      COOKIE_SECURE: "false"
+      SESSION_TTL: 168h
+      TZ: Asia/Shanghai
     depends_on:
       mysql:
         condition: service_healthy
@@ -49,13 +49,11 @@ services:
       - frontend
 
   web:
-    image: ${WEB_IMAGE:-invest-planner-web:local}
-    build:
-      context: .
-      dockerfile: deploy/web.Dockerfile
+    image: ghcr.io/inevitableljw/invest-planner-web:latest
+    pull_policy: always
     restart: unless-stopped
     ports:
-      - ${APP_PORT:-3000}:8080
+      - "3000:8080"
     depends_on:
       api:
         condition: service_healthy

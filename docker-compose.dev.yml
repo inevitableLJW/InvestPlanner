@@ -1,0 +1,22 @@
+name: invest-planner-dev
+
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: invest_planner
+      MYSQL_USER: invest_planner
+      MYSQL_PASSWORD: invest_planner
+      MYSQL_ROOT_PASSWORD: root-password
+    ports:
+      - "3306:3306"
+    volumes:
+      - invest-planner-mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-proot-password"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  invest-planner-mysql:
