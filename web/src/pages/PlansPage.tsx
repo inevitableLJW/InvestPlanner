@@ -21,7 +21,7 @@ export function PlansPage() {
   return <>
     <section className="hero-row plans-hero">
       <div><p className="eyebrow">LONG-TERM INVESTING</p><h1>让每月结余，<br /><span>有计划地增长。</span></h1><p className="muted">建立你的投资规则，按 App 汇总支出，把可投入资金分配给长期标的。</p></div>
-      <div className="hero-visual" aria-hidden="true"><span>本月计划投入</span><strong>¥ 8,600</strong><div><i style={{ width: '68%' }} /></div><small>按照计划，稳步前进</small></div>
+      <div className="hero-visual" aria-hidden="true"><span>本月计划投入</span><strong>{plans.length === 0 ? '--' : '¥ 8,600'}</strong><div><i style={{ width: '68%' }} /></div><small>按照计划，稳步前进</small></div>
     </section>
     {error && <div className="alert" role="alert">{error}</div>}
     <form className="panel create-row create-plan-card" onSubmit={create}>

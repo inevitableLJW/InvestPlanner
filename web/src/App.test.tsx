@@ -40,6 +40,7 @@ describe('plan-first onboarding', () => {
       .mockImplementationOnce(() => json({ items: [] }))
     renderApp('/plans')
     expect(await screen.findByRole('button', { name: '创建定投计划' })).toBeInTheDocument()
+    expect(screen.getByText('--')).toBeInTheDocument()
     expect(screen.getByText(/可直接选择现金/)).toHaveTextContent('自定义标的')
   })
 })
