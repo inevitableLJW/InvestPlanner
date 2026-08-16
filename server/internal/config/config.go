@@ -2,9 +2,12 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"time"
+
+	"github.com/go-sql-driver/mysql"
 )
 
 type Config struct {
@@ -33,7 +36,11 @@ func Load() (Config, error) {
 		cfg.WebOrigin = "http://localhost:5173"
 	}
 	if cfg.MySQLDSN == "" {
-		return Config{}, fmt.Errorf("MYSQL_DSN is required")
+		var err error
+		cfg.MySQLDSN, err = mysqlDSNFromEnvironment()
+		if err != nil {
+			return Config{}, err
+		}
 	}
 	if raw := os.Getenv("COOKIE_SECURE"); raw != "" {
 		value, err := strconv.ParseBool(raw)
@@ -53,4 +60,33 @@ func Load() (Config, error) {
 		cfg.SessionTTL = value
 	}
 	return cfg, nil
+}
+
+func mysqlDSNFromEnvironment() (string, error) {
+	password := os.Getenv("MYSQL_PASSWORD")
+	if password == "" {
+		return "", fmt.Errorf("MYSQL_DSN or MYSQL_PASSWORD is required")
+	}
+
+	host := envOrDefault("MYSQL_HOST", "mysql")
+	port := envOrDefault("MYSQL_PORT", "3306")
+	database := envOrDefault("MYSQL_DATABASE", "invest_planner")
+	user := envOrDefault("MYSQL_USER", "invest_planner")
+	dsn := mysql.NewConfig()
+	dsn.User = user
+	dsn.Passwd = password
+	dsn.Net = "tcp"
+	dsn.Addr = net.JoinHostPort(host, port)
+	dsn.DBName = database
+	dsn.Params = map[string]string{"charset": "utf8mb4"}
+	dsn.ParseTime = true
+	dsn.Loc = time.Local
+	return dsn.FormatDSN(), nil
+}
+
+func envOrDefault(name, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
+	}
+	return fallback
 }

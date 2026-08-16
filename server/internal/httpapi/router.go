@@ -3,6 +3,7 @@ package httpapi
 import (
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -31,7 +32,9 @@ func New(cfg config.Config, app *service.App) *gin.Engine {
 	router := gin.New()
 	router.Use(gin.Recovery(), requestLogger())
 	router.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{cfg.WebOrigin},
+		AllowOriginWithContextFunc: func(c *gin.Context, origin string) bool {
+			return originAllowed(c, origin, cfg.WebOrigin)
+		},
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Content-Type", "Accept"},
 		AllowCredentials: true,
@@ -85,13 +88,35 @@ func (a *API) originGuard() gin.HandlerFunc {
 			return
 		}
 		origin := c.GetHeader("Origin")
-		if origin != "" && origin != a.cfg.WebOrigin {
+		if origin != "" && !originAllowed(c, origin, a.cfg.WebOrigin) {
 			respondError(c, http.StatusForbidden, "origin_forbidden", "请求来源不被允许", nil)
 			c.Abort()
 			return
 		}
 		c.Next()
 	}
+}
+
+func originAllowed(c *gin.Context, origin, configuredOrigin string) bool {
+	return origin == configuredOrigin || origin == requestOrigin(c)
+}
+
+func requestOrigin(c *gin.Context) string {
+	scheme := "http"
+	if c.Request.TLS != nil {
+		scheme = "https"
+	}
+	if forwarded := strings.TrimSpace(strings.Split(c.GetHeader("X-Forwarded-Proto"), ",")[0]); forwarded != "" {
+		scheme = forwarded
+	}
+	if scheme != "http" && scheme != "https" {
+		return ""
+	}
+	host := strings.TrimSpace(c.Request.Host)
+	if host == "" {
+		return ""
+	}
+	return (&url.URL{Scheme: scheme, Host: host}).String()
 }
 
 func (a *API) authenticate() gin.HandlerFunc {

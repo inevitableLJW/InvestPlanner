@@ -1,6 +1,11 @@
 # TrueNAS SCALE 25.10: Apps > Discover Apps > menu > Install via YAML.
-# Before saving, replace all three REPLACE_* values below.
 name: invest-planner
+
+# Edit values only in this block. References below reuse them automatically.
+x-invest-planner-settings:
+  mysql-data-dir: &mysql_data_dir /mnt/REPLACE_WITH_POOL/apps/invest-planner/mysql
+  mysql-password: &mysql_password REPLACE_WITH_A_LONG_RANDOM_PASSWORD
+  web-port: &web_port 3000
 
 services:
   mysql:
@@ -9,11 +14,13 @@ services:
     environment:
       MYSQL_DATABASE: invest_planner
       MYSQL_USER: invest_planner
-      MYSQL_PASSWORD: REPLACE_WITH_A_LONG_RANDOM_PASSWORD
+      MYSQL_PASSWORD: *mysql_password
       MYSQL_RANDOM_ROOT_PASSWORD: "yes"
       TZ: Asia/Shanghai
     volumes:
-      - /mnt/REPLACE_WITH_POOL/apps/invest-planner/mysql:/var/lib/mysql
+      - type: bind
+        source: *mysql_data_dir
+        target: /var/lib/mysql
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u\"$${MYSQL_USER}\" -p\"$${MYSQL_PASSWORD}\" --silent"]
       interval: 10s
@@ -30,8 +37,11 @@ services:
     environment:
       APP_ENV: production
       HTTP_ADDR: :8080
-      MYSQL_DSN: invest_planner:REPLACE_WITH_A_LONG_RANDOM_PASSWORD@tcp(mysql:3306)/invest_planner?charset=utf8mb4&parseTime=True&loc=Local
-      WEB_ORIGIN: http://REPLACE_WITH_TRUENAS_IP:3000
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_DATABASE: invest_planner
+      MYSQL_USER: invest_planner
+      MYSQL_PASSWORD: *mysql_password
       COOKIE_SECURE: "false"
       SESSION_TTL: 168h
       TZ: Asia/Shanghai
@@ -53,7 +63,9 @@ services:
     pull_policy: always
     restart: unless-stopped
     ports:
-      - "3000:8080"
+      - target: 8080
+        published: *web_port
+        protocol: tcp
     depends_on:
       api:
         condition: service_healthy
@@ -70,3 +82,11 @@ networks:
   backend:
     internal: true
   frontend:
+
+# TrueNAS replaces 0.0.0.0 with the selected node IP when rendering the portal.
+x-portals:
+  - name: Web UI
+    scheme: http
+    host: 0.0.0.0
+    port: *web_port
+    path: /

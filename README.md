@@ -68,12 +68,12 @@ docker compose up -d --build
 1. 推送本仓库后，确认 GitHub Actions 的 `Container images` 工作流成功，并将两个 GHCR Package 设置为 Public。
 2. 打开 **Apps > Discover Apps > 右上角菜单 > Install via YAML**，应用名填写 `invest-planner`。
 3. 粘贴 [`deploy/truenas-compose.yml`](deploy/truenas-compose.yml) 的内容。
-4. 全局替换模板中的三个值：`REPLACE_WITH_POOL`、`REPLACE_WITH_TRUENAS_IP`、`REPLACE_WITH_A_LONG_RANDOM_PASSWORD`。密码建议只使用至少 32 位的 ASCII 字母和数字，避免 Compose 将 `$` 等字符当作变量。
-5. 保存，等待三个容器健康后访问 `http://TRUENAS_IP:3000`。
+4. 只修改模板顶部 `x-invest-planner-settings` 配置区中的数据目录、MySQL 密码和 Web 端口。密码只需填写一次，建议使用至少 32 位的随机字符。
+5. 保存，等待三个容器健康。在应用详情页点击 **Web UI**，TrueNAS 会用 Node IP 打开 `http://NODE_IP:3000/`。
 
-模板会拉取 `linux/amd64` 或 `linux/arm64` 的 GHCR 镜像，适配常见 TrueNAS 主机架构。端口 `3000` 如被占用，可同时修改 `web.ports` 左侧端口和 `WEB_ORIGIN` 中的端口。
+模板会拉取 `linux/amd64` 或 `linux/arm64` 的 GHCR 镜像，适配常见 TrueNAS 主机架构。YAML anchors 会把顶部的设置复用到各服务；`x-portals` 中的 `host: 0.0.0.0` 表示由 TrueNAS 选用 Node IP，并不是让浏览器访问 `0.0.0.0`。
 
-如果通过 HTTPS 反向代理对外提供服务，请把 `WEB_ORIGIN`（或 `.env` 中的 `APP_URL`）改为精确的 `https://域名`，并设置 `COOKIE_SECURE=true`。不要在公网直接暴露 MySQL 或本项目的 HTTP 端口。
+如果通过 HTTPS 反向代理对外提供服务，请确保代理保留 `Host` 并传递 `X-Forwarded-Proto=https`，同时设置 `COOKIE_SECURE=true`；前后端分开部署时还需把 `WEB_ORIGIN`（或 `.env` 中的 `APP_URL`）设为精确的 `https://域名`。不要在公网直接暴露 MySQL 或本项目的 HTTP 端口。
 
 首次初始化后再修改 `MYSQL_PASSWORD` 不会自动修改数据库内已有账号密码；如需轮换密码，请先在 MySQL 中修改账号，再同步更新 Compose 配置。
 
@@ -88,7 +88,7 @@ docker compose logs --tail=100 mysql api web
 
 后端变量见 `server/.env.example`：
 
-- `MYSQL_DSN`：MySQL DSN；生产环境必须使用独立强密码并限制数据库权限。
+- `MYSQL_DSN`：完整的 MySQL DSN；也可改用 `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_DATABASE`、`MYSQL_USER` 和 `MYSQL_PASSWORD` 分项配置。生产环境必须使用独立强密码并限制数据库权限。
 - `WEB_ORIGIN`：允许携带 Cookie 的前端来源，必须是精确来源，不能使用通配符。
 - `APP_ENV=production`：启用生产安全行为。
 - `COOKIE_SECURE=true`：生产环境必须开启，并只通过 HTTPS 提供服务。
