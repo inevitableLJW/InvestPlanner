@@ -4,6 +4,10 @@ import { APIError, del, get, post } from '../lib/api'
 import { percent, yuan } from '../lib/format'
 import type { Plan } from '../types'
 
+function localMonthKey(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+}
+
 export function PlansPage() {
   const navigate = useNavigate()
   const [plans, setPlans] = useState<Plan[]>([])
@@ -32,10 +36,19 @@ export function PlansPage() {
       setError(`计划未删除：${reason instanceof APIError ? reason.message : '删除失败，请刷新后重试'}。`)
     } finally { setDeleteBusy(false) }
   }
+  const currentMonth = localMonthKey()
+  const currentMonthRecords = plans.flatMap(plan =>
+    plan.summary?.Monthly?.filter(item => item.Month === currentMonth) ?? [],
+  )
+  const currentMonthRecommendedCents = currentMonthRecords.reduce((total, item) => total + item.RecommendedCents, 0)
+  const currentMonthActualCents = currentMonthRecords.reduce((total, item) => total + item.ActualCents, 0)
+  const currentMonthProgress = currentMonthRecommendedCents > 0
+    ? Math.min(100, currentMonthActualCents / currentMonthRecommendedCents * 100)
+    : 0
   return <>
     <section className="hero-row plans-hero">
       <div><p className="eyebrow">LONG-TERM INVESTING</p><h1>让每月结余，<br /><span>有计划地增长。</span></h1><p className="muted">建立你的投资规则，按 App 汇总支出，把可投入资金分配给长期标的。</p></div>
-      <div className="hero-visual" aria-hidden="true"><span>本月计划投入</span><strong>{plans.length === 0 ? '--' : '¥ 8,600'}</strong><div><i style={{ width: '68%' }} /></div><small>按照计划，稳步前进</small></div>
+      <div className="hero-visual" aria-hidden="true"><span>本月计划投入</span><strong>{currentMonthRecords.length === 0 ? '--' : yuan(currentMonthRecommendedCents)}</strong><div><i style={{ width: `${currentMonthProgress}%` }} /></div><small>按照计划，稳步前进</small></div>
     </section>
     {error && <div className="alert" role="alert">{error}</div>}
     <form className="panel create-row create-plan-card" onSubmit={create}>

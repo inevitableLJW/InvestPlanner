@@ -62,6 +62,55 @@ describe('plan-first onboarding', () => {
     expect(screen.getByText('--')).toBeInTheDocument()
     expect(screen.getByText(/可直接选择现金/)).toHaveTextContent('自定义标的')
   })
+
+  it('summarizes saved current-month plan amounts in the hero', async () => {
+    const now = new Date()
+    const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+    const plans = [
+      {
+        id: 'p1', name: '长期计划', status: 'active', defaultContributionBps: 10000,
+        reserveCents: 0, roundingUnitCents: 10000, version: 1, deletable: false, destinations: [],
+        summary: {
+          Monthly: [{ Month: month, RecommendedCents: 650000, ActualCents: 325000 }],
+          RecommendedTotalCents: 650000, ActualTotalCents: 325000, CompletionRate: 0.5,
+        },
+      },
+      {
+        id: 'p2', name: '备用计划', status: 'active', defaultContributionBps: 10000,
+        reserveCents: 0, roundingUnitCents: 10000, version: 1, deletable: false, destinations: [],
+        summary: {
+          Monthly: [{ Month: month, RecommendedCents: 2250, ActualCents: 1125 }],
+          RecommendedTotalCents: 2250, ActualTotalCents: 1125, CompletionRate: 0.5,
+        },
+      },
+    ]
+    vi.spyOn(globalThis, 'fetch')
+      .mockImplementationOnce(() => json({ id: 'u1', username: 'user' }))
+      .mockImplementationOnce(() => json({ items: plans }))
+
+    const { container } = renderApp('/plans')
+    await screen.findByRole('heading', { name: '长期计划' })
+    const hero = container.querySelector('.hero-visual')
+    expect(hero?.querySelector('strong')).toHaveTextContent('¥6,522.50')
+    expect(hero?.querySelector('i')).toHaveStyle({ width: '50%' })
+    expect(hero).not.toHaveTextContent('8,600')
+  })
+
+  it('shows a placeholder when plans exist but no current-month record has been saved', async () => {
+    const plan = {
+      id: 'p1', name: '尚未记录', status: 'active', defaultContributionBps: 10000,
+      reserveCents: 0, roundingUnitCents: 10000, version: 1, deletable: false, destinations: [],
+      summary: { Monthly: [], RecommendedTotalCents: 0, ActualTotalCents: 0, CompletionRate: null },
+    }
+    vi.spyOn(globalThis, 'fetch')
+      .mockImplementationOnce(() => json({ id: 'u1', username: 'user' }))
+      .mockImplementationOnce(() => json({ items: [plan] }))
+
+    const { container } = renderApp('/plans')
+    await screen.findByRole('heading', { name: '尚未记录' })
+    expect(container.querySelector('.hero-visual strong')).toHaveTextContent('--')
+    expect(container.querySelector('.hero-visual i')).toHaveStyle({ width: '0%' })
+  })
 })
 describe('investment target settings', () => {
   it('supports common targets, progressive custom entry, even allocation and removal', async () => {
