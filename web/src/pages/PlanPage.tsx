@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type CSSProperties, type FormEvent } from
 import { Link, NavLink, Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom'
 import { AppIcon, TargetIcon } from '../components/AppIcon'
 import { APIError, del, get, put } from '../lib/api'
-import { fromYuan, percent, toYuan, yuan } from '../lib/format'
+import { fromYuan, parseYuanExpression, percent, toYuan, yuan } from '../lib/format'
 import {
   COMMON_INVESTMENT_TARGETS,
   CUSTOM_TARGET_VALUE,
@@ -56,7 +56,8 @@ function Overview({ plan }: { plan: Plan }) {
   const active = plan.destinations.filter(item => item.active && !item.archived)
   const total = activeAllocationTotal(plan.destinations)
   return <section className="stack page-enter">
-    {plan.status !== 'active' && <div className="notice notice-action"><div><strong>还差一步就能开始记录</strong><span>至少启用一个投资标的，并让分配比例合计为 100%。</span></div><Link className="button secondary" to="settings">去完成设置</Link></div>}
+    {plan.status === 'draft' && <div className="notice notice-action"><div><strong>计划尚未发布</strong><span>保存只会保留草稿；配置完整并发布后，才可以开始记录每月收支。</span></div><Link className="button secondary" to="settings">去完成并发布</Link></div>}
+    {plan.status === 'archived' && <div className="notice"><strong>计划已归档</strong><span>历史记录仍然保留，但不能新增或重新计算月份。</span></div>}
     <div className="metric-grid">
       <Metric label="已启用标的" value={`${active.length} 个`} note="参与下月计算" />
       <Metric label="分配进度" value={percent(total)} note={total === 10000 ? '配置完整' : `还差 ${percent(Math.abs(10000 - total))}`} />
@@ -74,8 +75,8 @@ function Settings({ plan, onSaved }: { plan: Plan; onSaved(plan: Plan): void }) 
   const navigate = useNavigate()
   const [draft, setDraft] = useState(plan)
   const [message, setMessage] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [saved, setSaved] = useState(false)
+  const [busyAction, setBusyAction] = useState<'save_draft' | 'publish' | null>(null)
+  const [savedAction, setSavedAction] = useState<'save_draft' | 'publish' | null>(null)
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null)
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null)
   const active = draft.destinations.filter(item => item.active && !item.archived)
@@ -98,27 +99,30 @@ function Settings({ plan, onSaved }: { plan: Plan; onSaved(plan: Plan): void }) 
   }
   const save = async (event: FormEvent) => {
     event.preventDefault(); setMessage('')
-    if (draft.status === 'active' && !allocationReady) { setMessage('请先修正投资标的配置，再启用计划'); return }
-    setBusy(true)
+    const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null
+    const action = submitter?.value === 'publish' ? 'publish' : 'save_draft'
+    if (action === 'publish' && !allocationReady) { setMessage('请先修正投资标的配置，再发布计划'); return }
+    if (action === 'save_draft' && plan.status === 'active' && !window.confirm('保存为草稿后，计划将暂停运行，不能新增或重新计算月度记录。确认继续？')) return
+    setBusyAction(action)
     try {
       const result = await put<Plan>(`/plans/${plan.id}`, {
-        name: draft.name, status: draft.status, defaultContributionBps: draft.defaultContributionBps,
+        name: draft.name, action, defaultContributionBps: draft.defaultContributionBps,
         reserveCents: draft.reserveCents, roundingUnitCents: draft.roundingUnitCents, version: draft.version,
         destinations: draft.destinations.map(item => ({ id: item.id ?? '', name: item.name.trim(), active: item.active, allocationBps: item.allocationBps, sortOrder: item.sortOrder, version: item.version ?? 0 })),
       })
       const normalized = { ...result, destinations: result.destinations.map(item => ({ ...item, name: normalizeInvestmentTargetName(item.name) })) }
-      setDraft(normalized); onSaved(normalized); setSaved(true)
-    } catch (reason) { setMessage(reason instanceof APIError ? reason.message : '保存失败，请稍后重试') }
-    finally { setBusy(false) }
+      setDraft(normalized); onSaved(normalized); setSavedAction(action)
+    } catch (reason) { setMessage(reason instanceof APIError ? reason.message : action === 'publish' ? '发布失败，请稍后重试' : '保存草稿失败，请稍后重试') }
+    finally { setBusyAction(null) }
   }
   return <form className="stack settings-page page-enter" onSubmit={save}>
     {message && <div className="alert page-feedback" role="alert">{message}</div>}
     <section className="panel settings-section">
       <div className="section-number">01</div>
-      <div className="section-intro"><p className="section-kicker">BASICS</p><h2>基本信息</h2><p className="muted">给计划一个清晰的名字，并决定当前是否开始运行。</p></div>
+      <div className="section-intro"><p className="section-kicker">BASICS</p><h2>基本信息</h2><p className="muted">给计划一个清晰的名字；保存只保留草稿，发布后才开始运行。</p></div>
       <div className="form-grid settings-fields">
         <label>计划名称<input required value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })} /></label>
-        <label>计划状态<select value={draft.status} onChange={event => setDraft({ ...draft, status: event.target.value as Plan['status'] })}><option value="draft">待配置</option><option value="active" disabled={!allocationReady}>运行中</option><option value="archived">已归档</option></select><span className="field-help">{allocationReady ? '标的配置已就绪，可以启用' : '比例达到 100% 后即可启用'}</span></label>
+        <div className="status-field"><span>当前状态</span><strong className={`badge ${draft.status}`}><i />{draft.status === 'active' ? '计划运行中' : draft.status === 'archived' ? '已归档' : '草稿，尚未开始'}</strong><span className="field-help">{allocationReady ? '配置已就绪，可以发布' : '比例达到 100% 后即可发布'}</span></div>
       </div>
     </section>
     <section className="panel settings-section">
@@ -134,7 +138,7 @@ function Settings({ plan, onSaved }: { plan: Plan; onSaved(plan: Plan): void }) 
       <div className="section-number">03</div>
       <div className="section-intro target-intro"><div><p className="section-kicker">TARGETS</p><h2>投资标的</h2><p className="muted">从常用列表选择即可；只有列表外标的才需要手动输入。</p></div><button type="button" className="button secondary" onClick={addDestination}>＋ 添加投资标的</button></div>
       <div className={`allocation-summary ${allocationReady ? 'valid' : 'invalid'}`}>
-        <div className="allocation-summary-copy"><span>分配进度</span><strong>{percent(activeTotal)}</strong><small>{active.length === 0 ? '请至少启用一个标的' : activeTotal === 10000 ? '配置完整，可以保存启用' : activeTotal < 10000 ? `还剩 ${percent(10000 - activeTotal)} 待分配` : `超出 ${percent(activeTotal - 10000)}`}</small></div>
+        <div className="allocation-summary-copy"><span>分配进度</span><strong>{percent(activeTotal)}</strong><small>{active.length === 0 ? '请至少启用一个标的' : activeTotal === 10000 ? '配置完整，可以发布' : activeTotal < 10000 ? `还剩 ${percent(10000 - activeTotal)} 待分配` : `超出 ${percent(activeTotal - 10000)}`}</small></div>
         <div className="allocation-progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.min(100, activeTotal / 100)}><i style={{ width: `${Math.min(100, activeTotal / 100)}%` }} /></div>
         <div className="allocation-actions"><button type="button" className="button compact" disabled={!active.length} onClick={() => setDraft(current => ({ ...current, destinations: sortDestinationsByAllocation(current.destinations) }))}>按比例从高到低</button><button type="button" className="button compact" disabled={!active.length} onClick={() => setDraft(current => ({ ...current, destinations: distributeAllocationsEvenly(current.destinations) }))}>智能均分到 100%</button></div>
       </div>
@@ -154,8 +158,8 @@ function Settings({ plan, onSaved }: { plan: Plan; onSaved(plan: Plan): void }) 
         </fieldset>
       })}</div>
     </section>
-    <div className="save-dock"><div><strong>{allocationReady ? '✓ 标的配置已就绪' : '标的配置尚未完成'}</strong><span>{draft.status === 'draft' ? '可以先保存草稿，完成后再启用。' : allocationReady ? '保存后即可用于月度计算。' : '运行中的计划必须合计为 100%。'}</span></div><button className="button primary" disabled={busy || (draft.status === 'active' && !allocationReady)}>{busy ? <><span className="button-spinner" />保存中…</> : '保存计划设置'}</button></div>
-    {saved && <div className="modal-backdrop" role="presentation"><section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="saved-settings-title"><span className="dialog-icon">✓</span><h2 id="saved-settings-title">设置已保存</h2><p>投资标的和投资规则已更新。确认后回到计划概览。</p><button type="button" className="button primary wide" onClick={() => { setSaved(false); navigate(`/plans/${plan.id}`, { replace: true }) }}>确认并返回概览</button></section></div>}
+    <div className="save-dock"><div><strong>{plan.status === 'archived' ? '计划已归档' : allocationReady ? '✓ 标的配置已就绪' : '标的配置尚未完成'}</strong><span>{plan.status === 'archived' ? '归档计划只保留历史，不能修改或重新发布。' : plan.status === 'active' ? '保存草稿会暂停计划；发布会保存并继续运行。' : allocationReady ? '可以保存草稿，只有发布后计划才会开始。' : '未完成也可保存草稿，发布前需分配到 100%。'}</span></div><div className="save-actions"><button className="button secondary" name="action" value="save_draft" disabled={busyAction !== null || plan.status === 'archived'}>{busyAction === 'save_draft' ? <><span className="button-spinner" />保存中…</> : '保存草稿'}</button><button className="button primary" name="action" value="publish" disabled={busyAction !== null || !allocationReady || plan.status === 'archived'}>{busyAction === 'publish' ? <><span className="button-spinner" />发布中…</> : '发布计划'}</button></div></div>
+    {savedAction && <div className="modal-backdrop" role="presentation"><section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="saved-settings-title"><span className="dialog-icon">✓</span><h2 id="saved-settings-title">{savedAction === 'publish' ? '计划已发布' : '草稿已保存'}</h2><p>{savedAction === 'publish' ? '计划已经开始运行，现在可以记录每月收支。' : '设置已保存为草稿，计划尚未开始运行。'}</p><button type="button" className="button primary wide" onClick={() => { setSavedAction(null); navigate(`/plans/${plan.id}`, { replace: true }) }}>确认并返回概览</button></section></div>}
   </form>
 }
 
@@ -178,16 +182,17 @@ function MonthEditor({ plan }: { plan: Plan }) {
     void get<MonthRecord>(`/plans/${plan.id}/months/${month}`).then(result => { setRecord(result); setIncome(toYuan(result.incomeCents)); setRate(result.contributionBps / 100); setExpenses(result.expenses); setNote(result.note) }).catch(reason => { if (reason.status !== 404) setMessage(reason.message); else setRecord(null) })
   }, [plan.id, plan.defaultContributionBps, month])
   const expenseTotal = expenses.reduce((sum, expense) => sum + expense.amountCents, 0)
-  const liveIncome = fromYuan(income)
+  const parsedIncome = parseYuanExpression(income)
+  const incomeIsValid = parsedIncome !== null
+  const liveIncome = parsedIncome ?? 0
   const estimatedBase = Math.max(liveIncome - expenseTotal - plan.reserveCents, 0)
-  const rawRecommended = Math.floor(estimatedBase * rate / 100)
-  const estimatedRecommended = Math.floor(rawRecommended / plan.roundingUnitCents) * plan.roundingUnitCents
   const save = async (event: FormEvent) => {
     event.preventDefault()
+    if (!incomeIsValid) { setMessage('上月总收入仅支持非负金额及 +、- 运算，例如 20000+500-100'); return }
     if (record && month < defaultMonth() && !window.confirm('这是历史月份。确认使用该月已保存的投资标的快照重新计算？')) return
     setBusy(true); setMessage('')
     try {
-      const result = await put<MonthRecord>(`/plans/${plan.id}/months/${month}`, { incomeCents: fromYuan(income), contributionBps: Math.round(rate * 100), expenses, note, ...(record ? { version: record.version } : {}) })
+      const result = await put<MonthRecord>(`/plans/${plan.id}/months/${month}`, { incomeCents: liveIncome, contributionBps: Math.round(rate * 100), expenses, note, ...(record ? { version: record.version } : {}) })
       setRecord(result); setMessage('计算完成，月度记录已保存'); navigate(`/plans/${plan.id}/month/${month}`, { replace: true })
     } catch (reason) { setMessage(reason instanceof APIError ? reason.message : '保存失败，请稍后重试') }
     finally { setBusy(false) }
@@ -216,12 +221,12 @@ function MonthEditor({ plan }: { plan: Plan }) {
     <form className="panel stack month-form" onSubmit={save}>
       <div className="section-head month-heading"><div><p className="section-kicker">MONTHLY CHECK-IN</p><h2>记录本月收支</h2><p className="muted">用上月收入减去本月支出与预留金额，得到本月可投资基数。</p></div><label className="month-picker">记录月份<input type="month" value={month} onChange={event => setMonth(event.target.value)} /></label></div>
       <div className="cashflow-top-grid">
-        <label className="income-field">上月总收入<div className="input-affix prominent"><span>¥</span><input type="number" min="0" step="0.01" placeholder="0.00" value={income} onChange={event => setIncome(event.target.value)} /></div><span className="field-help">填写税后到账金额</span></label>
+        <label className="income-field">上月总收入<div className="input-affix prominent"><span>¥</span><input aria-label="上月总收入" type="text" inputMode="decimal" placeholder="0.00" value={income} onChange={event => setIncome(event.target.value)} aria-invalid={!incomeIsValid} /></div><span className="field-help">{income.trim() && incomeIsValid ? `当前合计 ${yuan(liveIncome)} · 支持 +、- 运算` : '填写税后到账金额；支持 20000+500-100'}</span>{!incomeIsValid && <span className="inline-error">仅支持非负金额及 +、- 运算</span>}</label>
         <div className="rate-field"><span className="field-label">本月投入比例</span><div className="preset-row" aria-label="本月投入比例预设">{[50, 60, 70, 80, 100].map(value => <button type="button" className={rate === value ? 'active' : ''} aria-pressed={rate === value} key={value} onClick={() => setRate(value)}>{value}%</button>)}</div><label className="sr-only" htmlFor="custom-rate">自定义投入比例</label><div className="rate-input"><input id="custom-rate" type="number" min="0" max="100" step="1" value={rate} onChange={event => setRate(Number(event.target.value))} /><span>%</span></div></div>
       </div>
       <div className="section-head expense-heading"><div><h3>支出 App</h3><p className="muted">按付款 App 汇总即可，同一笔消费只记录一次。</p></div><button type="button" className="button secondary compact" onClick={() => void copyLayout()}>↗ 复制上月来源</button></div>
       <div className="expense-grid">{expenses.map((expense, index) => <label className={`expense-card ${expense.amountCents > 0 ? 'has-value' : ''}`} key={expense.sourceId || index}><span className="expense-card-head"><AppIcon name={expense.sourceName} size="lg" /><span><strong>{expense.sourceName}</strong><small>{expense.amountCents > 0 ? '已填写' : '本月支出'}</small></span></span><div className="input-affix"><span>¥</span><input aria-label={`${expense.sourceName}支出金额`} type="number" min="0" step="0.01" placeholder="0.00" value={toYuan(expense.amountCents)} onChange={event => setExpenses(expenses.map((item, itemIndex) => itemIndex === index ? { ...item, amountCents: fromYuan(event.target.value) } : item))} /></div></label>)}</div>
-      <div className="live-summary" aria-live="polite"><div><span>收入</span><strong>{yuan(liveIncome)}</strong></div><b>−</b><div><span>支出</span><strong>{yuan(expenseTotal)}</strong></div><b>−</b><div><span>预留</span><strong>{yuan(plan.reserveCents)}</strong></div><b>=</b><div className="highlight"><span>预计可投入</span><strong>{yuan(estimatedRecommended)}</strong></div></div>
+      <div className="live-summary" aria-live="polite"><div><span>收入</span><strong>{yuan(liveIncome)}</strong></div><b>−</b><div><span>支出</span><strong>{yuan(expenseTotal)}</strong></div><b>−</b><div><span>预留</span><strong>{yuan(plan.reserveCents)}</strong></div><b>=</b><div className="highlight"><span>预计可投入</span><strong>{yuan(estimatedBase)}</strong></div></div>
       <label>本月备注（选填）<textarea placeholder="例如：奖金月、旅行支出、临时调整投入比例…" value={note} onChange={event => setNote(event.target.value)} /></label>
       <button className="button primary calculate-button" disabled={busy}>{busy ? <><span className="button-spinner" />正在计算…</> : record ? '重新计算并保存' : '生成本月投资建议 →'}</button>
       {record && <p className="hint centered">重新计算历史记录时，会沿用该月保存的投资标的快照，不受当前设置影响。</p>}
@@ -230,7 +235,7 @@ function MonthEditor({ plan }: { plan: Plan }) {
       <div className="section-head"><div><p className="section-kicker">RECOMMENDATION</p><h2>本月投资建议</h2></div><span className={`badge ${record.status}`}>{statusLabel(record.status)}</span></div>
       <div className="metric-grid"><Metric label="本月收入" value={yuan(record.incomeCents)} /><Metric label="本月支出" value={yuan(record.expenseTotalCents)} /><Metric label="可投入基数" value={yuan(record.investableBaseCents)} /><Metric label="建议投入" value={yuan(record.recommendedTotalCents)} accent /></div>
       {record.investableBaseCents === 0 && <div className="notice">收入扣除支出与预留金额后暂无可投入余额，本月建议为 0。</div>}
-      <details className="formula"><summary>查看计算方式</summary><p>max(收入 − 支出 − 预留, 0) × {percent(record.contributionBps)}，再按 {yuan(record.roundingUnitCents)} 向下取整；投资标的尾差按最大余数法稳定分配。</p></details>
+      <details className="formula"><summary>查看计算方式</summary><p>max(收入 − 支出 − 预留, 0) × {percent(record.contributionBps)}；{record.allocations.some(item => item.name.trim() === '现金') ? `非现金投资标的按 ${yuan(record.roundingUnitCents)} 向下取整，剩余尾差（包括零头）全部归入现金。` : `未启用现金时，建议总额按 ${yuan(record.roundingUnitCents)} 向下取整，投资标的尾差按最大余数法稳定分配。`}</p></details>
       <div className="actual-list">{record.allocations.map((allocation, index) => <div className="actual-row" key={allocation.id}><TargetIcon name={allocation.name} /><div><strong>{allocation.name}</strong><span>建议 {yuan(allocation.recommendedCents)} · 占比 {percent(allocation.allocationBps)}</span></div><label>实际投入<div className="input-affix"><span>¥</span><input type="number" min="0" step="0.01" value={toYuan(allocation.actualCents)} onChange={event => setRecord({ ...record, allocations: record.allocations.map((item, itemIndex) => index === itemIndex ? { ...item, actualCents: fromYuan(event.target.value) } : item) })} /></div><small className={allocation.actualCents - allocation.recommendedCents >= 0 ? 'positive' : ''}>差额 {yuan(allocation.actualCents - allocation.recommendedCents)}</small></label></div>)}</div>
       <div className="result-actions"><div><span>实际投入合计</span><strong>{yuan(record.allocations.reduce((sum, item) => sum + item.actualCents, 0))}</strong></div><div className="actual-actions"><button type="button" className="button secondary" disabled={busy} onClick={() => void investAllByTarget()}>✓ 按建议全部投入</button><button type="button" className="button primary" disabled={busy} onClick={() => void updateActuals()}>保存实际投入</button></div></div>
     </section>}

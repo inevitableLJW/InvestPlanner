@@ -128,9 +128,16 @@ type DestinationInput struct {
 	SortOrder     int    `json:"sortOrder"`
 }
 
+type PlanAction string
+
+const (
+	PlanActionSaveDraft PlanAction = "save_draft"
+	PlanActionPublish   PlanAction = "publish"
+)
+
 type PlanInput struct {
 	Name                   string             `json:"name"`
-	Status                 domain.PlanStatus  `json:"status"`
+	Action                 PlanAction         `json:"action"`
 	DefaultContributionBPS int                `json:"defaultContributionBps"`
 	ReserveCents           int64              `json:"reserveCents"`
 	RoundingUnitCents      int64              `json:"roundingUnitCents"`
@@ -146,8 +153,16 @@ func (a *App) CreatePlan(userID, name string) (database.Plan, error) {
 }
 
 func (a *App) UpdatePlan(userID, planID string, input PlanInput) (database.Plan, error) {
+	status := domain.PlanDraft
+	switch input.Action {
+	case PlanActionSaveDraft:
+	case PlanActionPublish:
+		status = domain.PlanActive
+	default:
+		return database.Plan{}, fmt.Errorf("%w: plan action must be save_draft or publish", ErrValidation)
+	}
 	plan := domain.Plan{
-		ID: planID, UserID: userID, Name: input.Name, Status: input.Status,
+		ID: planID, UserID: userID, Name: input.Name, Status: status,
 		DefaultContributionBPS: input.DefaultContributionBPS, ReserveCents: input.ReserveCents,
 		RoundingUnitCents: input.RoundingUnitCents, Version: input.Version,
 	}
@@ -162,22 +177,33 @@ func (a *App) UpdatePlan(userID, planID string, input PlanInput) (database.Plan,
 			AllocationBPS: destination.AllocationBPS, SortOrder: destination.SortOrder,
 		})
 	}
-	if input.Status == domain.PlanActive {
+	if status == domain.PlanActive {
 		if err := domain.ValidatePlan(plan); err != nil {
 			return database.Plan{}, fmt.Errorf("%w: %v", ErrValidation, err)
 		}
 	} else {
 		if strings.TrimSpace(input.Name) == "" || input.DefaultContributionBPS < 0 || input.DefaultContributionBPS > 10000 ||
-			!domain.ValidateMoney(input.ReserveCents) || input.RoundingUnitCents <= 0 {
+			!domain.ValidateMoney(input.ReserveCents) || input.RoundingUnitCents <= 0 || input.RoundingUnitCents > domain.MaxMoneyCents {
 			return database.Plan{}, fmt.Errorf("%w: invalid draft plan", ErrValidation)
 		}
 	}
 	modelPlan := database.Plan{
-		ID: planID, UserID: userID, Name: input.Name, Status: string(input.Status),
+		ID: planID, UserID: userID, Name: input.Name, Status: string(status),
 		DefaultContributionBPS: input.DefaultContributionBPS, ReserveCents: input.ReserveCents,
 		RoundingUnitCents: input.RoundingUnitCents, Version: input.Version,
 	}
 	return a.Store.UpdatePlan(userID, modelPlan, modelDestinations, input.Version)
+}
+
+func (a *App) CanDeletePlan(userID, planID string) (bool, error) {
+	return a.Store.CanDeletePlan(userID, planID)
+}
+
+func (a *App) DeleteDraftPlan(userID, planID string, expectedVersion int) error {
+	if expectedVersion < 1 {
+		return fmt.Errorf("%w: valid plan version is required", ErrValidation)
+	}
+	return a.Store.DeleteDraftPlan(userID, planID, expectedVersion)
 }
 
 type ExpenseRequest struct {

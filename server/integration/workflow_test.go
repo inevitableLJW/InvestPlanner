@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
+
+	"investplanner/server/internal/database"
 )
 
 func decodeObject(t *testing.T, response *httptest.ResponseRecorder) map[string]any {
@@ -29,8 +32,8 @@ func activateSingleDestination(t *testing.T, router http.Handler, cookie *http.C
 		}
 	}
 	response := requestJSON(t, router, http.MethodPut, "/api/v1/plans/"+plan["id"].(string), map[string]any{
-		"name": plan["name"], "status": "active", "defaultContributionBps": 8000,
-		"reserveCents": 0, "roundingUnitCents": 100, "version": plan["version"], "destinations": destinations,
+		"name": plan["name"], "action": "publish", "defaultContributionBps": 8000,
+		"reserveCents": 0, "roundingUnitCents": 10000, "version": plan["version"], "destinations": destinations,
 	}, cookie)
 	if response.Code != http.StatusOK {
 		t.Fatalf("activate plan status=%d body=%s", response.Code, response.Body.String())
@@ -40,7 +43,7 @@ func activateSingleDestination(t *testing.T, router http.Handler, cookie *http.C
 
 func TestPlanMonthSnapshotsConflictsAndIsolation(t *testing.T) {
 	router := testRouter(t)
-	owner := register(t, router, "owner1@example.com")
+	owner := register(t, router, "owner-one")
 	first := decodeObject(t, requestJSON(t, router, http.MethodPost, "/api/v1/plans", map[string]any{"name": "plan-one"}, owner))
 	second := decodeObject(t, requestJSON(t, router, http.MethodPost, "/api/v1/plans", map[string]any{"name": "plan-two"}, owner))
 	if len(first["destinations"].([]any)) != 4 {
@@ -87,8 +90,8 @@ func TestPlanMonthSnapshotsConflictsAndIsolation(t *testing.T) {
 	destinations := first["destinations"].([]any)
 	destinations[0].(map[string]any)["name"] = "renamed-destination"
 	changed := requestJSON(t, router, http.MethodPut, "/api/v1/plans/"+first["id"].(string), map[string]any{
-		"name": first["name"], "status": "active", "defaultContributionBps": 8000,
-		"reserveCents": 0, "roundingUnitCents": 100, "version": first["version"], "destinations": destinations,
+		"name": first["name"], "action": "publish", "defaultContributionBps": 8000,
+		"reserveCents": 0, "roundingUnitCents": 10000, "version": first["version"], "destinations": destinations,
 	}, owner)
 	if changed.Code != http.StatusOK {
 		t.Fatalf("rename status=%d body=%s", changed.Code, changed.Body.String())
@@ -103,7 +106,7 @@ func TestPlanMonthSnapshotsConflictsAndIsolation(t *testing.T) {
 		t.Fatal("historical recalculation must preserve destination snapshot")
 	}
 
-	outsider := register(t, router, "outsider1@example.com")
+	outsider := register(t, router, "outsider-one")
 	for _, path := range []string{
 		"/api/v1/plans/" + first["id"].(string),
 		"/api/v1/plans/" + first["id"].(string) + "/months/2026-07",
@@ -117,5 +120,114 @@ func TestPlanMonthSnapshotsConflictsAndIsolation(t *testing.T) {
 	deleted := requestJSON(t, router, http.MethodDelete, "/api/v1/plans/"+first["id"].(string)+"/months/2026-07", nil, owner)
 	if deleted.Code != http.StatusNoContent {
 		t.Fatalf("delete status=%d body=%s", deleted.Code, deleted.Body.String())
+	}
+}
+
+func TestPlanDraftLifecycleAndPermanentDeletion(t *testing.T) {
+	router := testRouter(t)
+	owner := register(t, router, "draft-owner")
+	outsider := register(t, router, "draft-outsider")
+
+	created := decodeObject(t, requestJSON(t, router, http.MethodPost, "/api/v1/plans", map[string]any{"name": "unfinished"}, owner))
+	if created["roundingUnitCents"] != float64(10000) || created["deletable"] != true {
+		t.Fatalf("unexpected new plan defaults: %#v", created)
+	}
+	draftPayload := func(plan map[string]any, action string) map[string]any {
+		return map[string]any{
+			"name": plan["name"], "action": action, "status": "active", "defaultContributionBps": 8000,
+			"reserveCents": 0, "roundingUnitCents": 10000, "version": plan["version"],
+			"destinations": plan["destinations"],
+		}
+	}
+
+	savedResponse := requestJSON(t, router, http.MethodPut, "/api/v1/plans/"+created["id"].(string), draftPayload(created, "save_draft"), owner)
+	if savedResponse.Code != http.StatusOK {
+		t.Fatalf("save draft status=%d body=%s", savedResponse.Code, savedResponse.Body.String())
+	}
+	saved := decodeObject(t, savedResponse)
+	if saved["status"] != "draft" || saved["deletable"] != true {
+		t.Fatalf("save_draft must ignore spoofed status: %#v", saved)
+	}
+
+	invalidPublish := requestJSON(t, router, http.MethodPut, "/api/v1/plans/"+saved["id"].(string), draftPayload(saved, "publish"), owner)
+	if invalidPublish.Code != http.StatusBadRequest {
+		t.Fatalf("invalid publish status=%d body=%s", invalidPublish.Code, invalidPublish.Body.String())
+	}
+	afterInvalid := decodeObject(t, requestJSON(t, router, http.MethodGet, "/api/v1/plans/"+saved["id"].(string), nil, owner))
+	if afterInvalid["status"] != "draft" || afterInvalid["version"] != saved["version"] {
+		t.Fatalf("invalid publish changed persisted plan: %#v", afterInvalid)
+	}
+
+	active := activateSingleDestination(t, router, owner, saved)
+	if active["status"] != "active" || active["deletable"] != false {
+		t.Fatalf("publish did not activate plan: %#v", active)
+	}
+	activeDelete := requestJSON(t, router, http.MethodDelete, "/api/v1/plans/"+active["id"].(string)+"/draft?version="+strconv.Itoa(int(active["version"].(float64))), nil, owner)
+	if activeDelete.Code != http.StatusConflict {
+		t.Fatalf("active draft-delete status=%d body=%s", activeDelete.Code, activeDelete.Body.String())
+	}
+
+	monthResponse := requestJSON(t, router, http.MethodPut, "/api/v1/plans/"+active["id"].(string)+"/months/2026-08", map[string]any{
+		"incomeCents": 100000, "contributionBps": 10000, "expenses": []any{},
+	}, owner)
+	if monthResponse.Code != http.StatusOK {
+		t.Fatalf("create history status=%d body=%s", monthResponse.Code, monthResponse.Body.String())
+	}
+	historicalDraftResponse := requestJSON(t, router, http.MethodPut, "/api/v1/plans/"+active["id"].(string), draftPayload(active, "save_draft"), owner)
+	if historicalDraftResponse.Code != http.StatusOK {
+		t.Fatalf("pause plan status=%d body=%s", historicalDraftResponse.Code, historicalDraftResponse.Body.String())
+	}
+	historicalDraft := decodeObject(t, historicalDraftResponse)
+	if historicalDraft["status"] != "draft" || historicalDraft["deletable"] != false {
+		t.Fatalf("historical draft must not be deletable: %#v", historicalDraft)
+	}
+	historyDelete := requestJSON(t, router, http.MethodDelete, "/api/v1/plans/"+historicalDraft["id"].(string)+"/draft?version="+strconv.Itoa(int(historicalDraft["version"].(float64))), nil, owner)
+	if historyDelete.Code != http.StatusConflict {
+		t.Fatalf("historical draft-delete status=%d body=%s", historyDelete.Code, historyDelete.Body.String())
+	}
+
+	archived := decodeObject(t, requestJSON(t, router, http.MethodPost, "/api/v1/plans", map[string]any{"name": "archived"}, owner))
+	archiveResponse := requestJSON(t, router, http.MethodDelete, "/api/v1/plans/"+archived["id"].(string)+"?version="+strconv.Itoa(int(archived["version"].(float64))), nil, owner)
+	if archiveResponse.Code != http.StatusNoContent {
+		t.Fatalf("archive status=%d body=%s", archiveResponse.Code, archiveResponse.Body.String())
+	}
+	archivedCurrent := decodeObject(t, requestJSON(t, router, http.MethodGet, "/api/v1/plans/"+archived["id"].(string), nil, owner))
+	archivedUpdate := requestJSON(t, router, http.MethodPut, "/api/v1/plans/"+archived["id"].(string), draftPayload(archivedCurrent, "save_draft"), owner)
+	if archivedUpdate.Code != http.StatusConflict {
+		t.Fatalf("archived plan update status=%d body=%s", archivedUpdate.Code, archivedUpdate.Body.String())
+	}
+	archivedDelete := requestJSON(t, router, http.MethodDelete, "/api/v1/plans/"+archived["id"].(string)+"/draft?version=2", nil, owner)
+	if archivedDelete.Code != http.StatusConflict {
+		t.Fatalf("archived draft-delete status=%d body=%s", archivedDelete.Code, archivedDelete.Body.String())
+	}
+
+	deletable := decodeObject(t, requestJSON(t, router, http.MethodPost, "/api/v1/plans", map[string]any{"name": "delete-me"}, owner))
+	deletePath := "/api/v1/plans/" + deletable["id"].(string) + "/draft?version=" + strconv.Itoa(int(deletable["version"].(float64)))
+	otherUserDelete := requestJSON(t, router, http.MethodDelete, deletePath, nil, outsider)
+	if otherUserDelete.Code != http.StatusNotFound {
+		t.Fatalf("cross-user draft-delete status=%d body=%s", otherUserDelete.Code, otherUserDelete.Body.String())
+	}
+	staleDelete := requestJSON(t, router, http.MethodDelete, "/api/v1/plans/"+deletable["id"].(string)+"/draft?version=2", nil, owner)
+	if staleDelete.Code != http.StatusConflict {
+		t.Fatalf("stale draft-delete status=%d body=%s", staleDelete.Code, staleDelete.Body.String())
+	}
+	deleted := requestJSON(t, router, http.MethodDelete, deletePath, nil, owner)
+	if deleted.Code != http.StatusNoContent {
+		t.Fatalf("draft-delete status=%d body=%s", deleted.Code, deleted.Body.String())
+	}
+	missing := requestJSON(t, router, http.MethodGet, "/api/v1/plans/"+deletable["id"].(string), nil, owner)
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("deleted plan still exists status=%d body=%s", missing.Code, missing.Body.String())
+	}
+	db, err := database.Open(testDSN(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var destinations int64
+	if err := db.Model(&database.PlanDestination{}).Where("plan_id = ?", deletable["id"]).Count(&destinations).Error; err != nil {
+		t.Fatal(err)
+	}
+	if destinations != 0 {
+		t.Fatalf("deleted plan left %d destinations", destinations)
 	}
 }

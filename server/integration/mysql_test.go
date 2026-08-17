@@ -7,10 +7,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	mysqlconfig "github.com/go-sql-driver/mysql"
 
 	"investplanner/server/internal/config"
 	"investplanner/server/internal/database"
@@ -19,12 +21,43 @@ import (
 	"investplanner/server/internal/service"
 )
 
-func testRouter(t *testing.T) *gin.Engine {
+func testDSN(t *testing.T) string {
 	t.Helper()
 	dsn := os.Getenv("MYSQL_TEST_DSN")
 	if dsn == "" {
 		t.Skip("MYSQL_TEST_DSN is not configured")
 	}
+	if err := validateTestDSN(dsn); err != nil {
+		t.Fatal(err)
+	}
+	return dsn
+}
+
+func validateTestDSN(dsn string) error {
+	parsed, err := mysqlconfig.ParseDSN(dsn)
+	if err != nil {
+		return fmt.Errorf("parse MYSQL_TEST_DSN: %w", err)
+	}
+	if !strings.HasSuffix(strings.ToLower(parsed.DBName), "_test") {
+		return fmt.Errorf("refusing destructive integration tests on database %q: MYSQL_TEST_DSN must select a dedicated database ending in _test", parsed.DBName)
+	}
+	return nil
+}
+
+func TestValidateTestDSNRejectsDevelopmentDatabase(t *testing.T) {
+	development := "user:password@tcp(127.0.0.1:3306)/invest_planner?parseTime=True"
+	if err := validateTestDSN(development); err == nil {
+		t.Fatal("expected development database DSN to be rejected")
+	}
+	testDatabase := "user:password@tcp(127.0.0.1:3306)/invest_planner_test?parseTime=True"
+	if err := validateTestDSN(testDatabase); err != nil {
+		t.Fatalf("expected dedicated test database DSN to be accepted: %v", err)
+	}
+}
+
+func testRouter(t *testing.T) *gin.Engine {
+	t.Helper()
+	dsn := testDSN(t)
 	db, err := database.Open(dsn)
 	if err != nil {
 		t.Fatal(err)
@@ -156,7 +189,7 @@ func TestSessionRestoreCookieAndExpiry(t *testing.T) {
 		t.Fatalf("session restore status=%d body=%s", restored.Code, restored.Body.String())
 	}
 	expiring := register(t, router, "expiring-user")
-	db, err := database.Open(os.Getenv("MYSQL_TEST_DSN"))
+	db, err := database.Open(testDSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}

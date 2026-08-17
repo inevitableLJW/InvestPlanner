@@ -4,7 +4,7 @@ export interface User { id: string; username: string }
 export interface Destination { id?: string; name: string; active: boolean; archived: boolean; sortOrder: number; allocationBps: number; version?: number }
 export interface Plan {
   id: string; name: string; status: PlanStatus; defaultContributionBps: number
-  reserveCents: number; roundingUnitCents: number; version: number
+  reserveCents: number; roundingUnitCents: number; version: number; deletable: boolean
   destinations: Destination[]; summary?: PlanStats
 }
 export interface ExpenseSource { id: string; name: string; sortOrder: number; active: boolean }

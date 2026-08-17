@@ -142,6 +142,19 @@ func Migrate(db *gorm.DB) error {
 				return err
 			}
 		}
+
+		count = 0
+		if err := tx.Model(&SchemaMigration{}).Where("version = ?", 5).Count(&count).Error; err != nil {
+			return err
+		}
+		if count == 0 {
+			if err := tx.Exec("ALTER TABLE plans MODIFY COLUMN rounding_unit_cents bigint NOT NULL DEFAULT 10000").Error; err != nil {
+				return fmt.Errorf("migration 5 update plan rounding default: %w", err)
+			}
+			if err := tx.Create(&SchemaMigration{Version: 5, AppliedAt: time.Now().UTC()}).Error; err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 }

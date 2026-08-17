@@ -62,6 +62,7 @@ func New(cfg config.Config, app *service.App) *gin.Engine {
 	protected.GET("/plans/:planID", api.getPlan)
 	protected.PUT("/plans/:planID", api.updatePlan)
 	protected.DELETE("/plans/:planID", api.archivePlan)
+	protected.DELETE("/plans/:planID/draft", api.deleteDraftPlan)
 
 	protected.GET("/plans/:planID/months", api.listMonths)
 	protected.GET("/plans/:planID/months/previous-sources", api.previousSources)

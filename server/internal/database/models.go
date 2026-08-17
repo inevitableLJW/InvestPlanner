@@ -39,7 +39,7 @@ type Plan struct {
 	Status                 string `gorm:"size:20;not null;index"`
 	DefaultContributionBPS int    `gorm:"not null;default:8000"`
 	ReserveCents           int64  `gorm:"not null;default:0"`
-	RoundingUnitCents      int64  `gorm:"not null;default:100"`
+	RoundingUnitCents      int64  `gorm:"not null;default:10000"`
 	Version                int    `gorm:"not null;default:1"`
 	ArchivedAt             *time.Time
 	CreatedAt              time.Time

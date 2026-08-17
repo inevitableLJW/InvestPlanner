@@ -29,6 +29,16 @@ func planResponse(plan database.Plan) gin.H {
 	}
 }
 
+func (a *API) planResponse(userID string, plan database.Plan) (gin.H, error) {
+	deletable, err := a.app.CanDeletePlan(userID, plan.ID)
+	if err != nil {
+		return nil, err
+	}
+	response := planResponse(plan)
+	response["deletable"] = deletable
+	return response, nil
+}
+
 func sourceResponse(source database.ExpenseSource) gin.H {
 	return gin.H{
 		"id": source.ID, "name": source.Name, "sortOrder": source.SortOrder, "active": source.Active,
@@ -44,7 +54,11 @@ func (a *API) listPlans(c *gin.Context) {
 	}
 	items := make([]gin.H, 0, len(plans))
 	for _, plan := range plans {
-		item := planResponse(plan)
+		item, responseErr := a.planResponse(currentUserID(c), plan)
+		if responseErr != nil {
+			handleError(c, responseErr)
+			return
+		}
 		stats, statsErr := a.app.PlanStats(currentUserID(c), plan.ID)
 		if statsErr == nil {
 			item["summary"] = stats
@@ -67,7 +81,12 @@ func (a *API) createPlan(c *gin.Context) {
 		handleError(c, err)
 		return
 	}
-	c.JSON(http.StatusCreated, planResponse(plan))
+	response, err := a.planResponse(currentUserID(c), plan)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, response)
 }
 
 func (a *API) getPlan(c *gin.Context) {
@@ -76,7 +95,12 @@ func (a *API) getPlan(c *gin.Context) {
 		handleError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, planResponse(plan))
+	response, err := a.planResponse(currentUserID(c), plan)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 func (a *API) updatePlan(c *gin.Context) {
@@ -90,7 +114,12 @@ func (a *API) updatePlan(c *gin.Context) {
 		handleError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, planResponse(plan))
+	response, err := a.planResponse(currentUserID(c), plan)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 func (a *API) archivePlan(c *gin.Context) {
@@ -100,6 +129,19 @@ func (a *API) archivePlan(c *gin.Context) {
 		return
 	}
 	if err := a.app.Store.ArchivePlan(currentUserID(c), c.Param("planID"), version); err != nil {
+		handleError(c, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+func (a *API) deleteDraftPlan(c *gin.Context) {
+	version, err := strconv.Atoi(c.Query("version"))
+	if err != nil || version < 1 {
+		respondError(c, http.StatusBadRequest, "validation_error", "需要有效版本号", nil)
+		return
+	}
+	if err := a.app.DeleteDraftPlan(currentUserID(c), c.Param("planID"), version); err != nil {
 		handleError(c, err)
 		return
 	}

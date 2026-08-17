@@ -145,7 +145,7 @@ go vet ./...
 真实 MySQL 集成测试：
 
 ```bash
-MYSQL_TEST_DSN='invest_planner:invest_planner@tcp(127.0.0.1:3306)/invest_planner?charset=utf8mb4&parseTime=True&loc=Local' go test ./integration -v
+MYSQL_TEST_DSN='invest_planner:invest_planner@tcp(127.0.0.1:3306)/invest_planner_test?charset=utf8mb4&parseTime=True&loc=Local' go test ./integration -v
 ```
 
-集成测试会清空该 DSN 中的业务表，必须使用专用测试数据库，禁止指向生产库。
+集成测试会清空测试表，因此 `MYSQL_TEST_DSN` 必须指向名称以 `_test` 结尾的专用数据库；测试代码会在连接和清表前拒绝开发库或生产库。

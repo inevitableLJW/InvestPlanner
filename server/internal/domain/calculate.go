@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strings"
 )
 
 var monthPattern = regexp.MustCompile(`^\d{4}-(0[1-9]|1[0-2])$`)
@@ -44,7 +45,6 @@ func Calculate(plan Plan, input MonthlyInput, destinations []Destination) (Calcu
 		investable = 0
 	}
 	rawRecommended := investable * int64(input.ContributionBPS) / BasisPointTotal
-	recommended := rawRecommended / plan.RoundingUnitCents * plan.RoundingUnitCents
 
 	active := make([]Destination, 0, len(destinations))
 	for _, destination := range destinations {
@@ -55,24 +55,66 @@ func Calculate(plan Plan, input MonthlyInput, destinations []Destination) (Calcu
 	if len(active) == 0 {
 		return Calculation{}, fmt.Errorf("%w: at least one active destination is required", ErrInvalidPlan)
 	}
-	units := recommended / plan.RoundingUnitCents
 	allocations := make([]DestinationAllocation, len(active))
-	remainders := make([]allocationRemainder, len(active))
+	cashIndex := -1
+	for i, destination := range active {
+		if strings.TrimSpace(destination.Name) == "现金" {
+			cashIndex = i
+			break
+		}
+	}
+	if cashIndex >= 0 {
+		allocatedCents := int64(0)
+		for i, destination := range active {
+			allocations[i] = DestinationAllocation{
+				DestinationID: destination.ID,
+				Name:          destination.Name,
+				SortOrder:     destination.SortOrder,
+				AllocationBPS: destination.AllocationBPS,
+			}
+			if i == cashIndex {
+				continue
+			}
+			theoreticalCents := rawRecommended * int64(destination.AllocationBPS) / BasisPointTotal
+			allocations[i].RecommendedCents = theoreticalCents / plan.RoundingUnitCents * plan.RoundingUnitCents
+			allocatedCents += allocations[i].RecommendedCents
+		}
+		allocations[cashIndex].RecommendedCents = rawRecommended - allocatedCents
+		return Calculation{
+			Month:                 input.Month,
+			IncomeCents:           input.IncomeCents,
+			ExpenseTotalCents:     expenseTotal,
+			ReserveCents:          plan.ReserveCents,
+			SurplusCents:          surplus,
+			InvestableBaseCents:   investable,
+			ContributionBPS:       input.ContributionBPS,
+			RecommendedTotalCents: rawRecommended,
+			RoundingUnitCents:     plan.RoundingUnitCents,
+			Allocations:           allocations,
+			Status:                DeriveExecutionStatus(rawRecommended, 0),
+		}, nil
+	}
+
+	// Without cash, retain the existing whole-unit recommendation and stable
+	// largest-remainder allocation behavior.
+	recommended := rawRecommended / plan.RoundingUnitCents * plan.RoundingUnitCents
+	units := recommended / plan.RoundingUnitCents
+	remainders := make([]allocationRemainder, 0, len(active))
 	allocatedUnits := int64(0)
 	for i, destination := range active {
+		allocations[i] = DestinationAllocation{
+			DestinationID: destination.ID,
+			Name:          destination.Name,
+			SortOrder:     destination.SortOrder,
+			AllocationBPS: destination.AllocationBPS,
+		}
 		numerator := units * int64(destination.AllocationBPS)
 		baseUnits := numerator / BasisPointTotal
 		allocatedUnits += baseUnits
-		allocations[i] = DestinationAllocation{
-			DestinationID:    destination.ID,
-			Name:             destination.Name,
-			SortOrder:        destination.SortOrder,
-			AllocationBPS:    destination.AllocationBPS,
-			RecommendedCents: baseUnits * plan.RoundingUnitCents,
-		}
-		remainders[i] = allocationRemainder{
+		allocations[i].RecommendedCents = baseUnits * plan.RoundingUnitCents
+		remainders = append(remainders, allocationRemainder{
 			index: i, remainder: numerator % BasisPointTotal, sortOrder: destination.SortOrder, id: destination.ID,
-		}
+		})
 	}
 	sort.SliceStable(remainders, func(i, j int) bool {
 		if remainders[i].remainder != remainders[j].remainder {

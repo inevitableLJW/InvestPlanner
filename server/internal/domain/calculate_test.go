@@ -64,7 +64,7 @@ func TestCalculateOneDestination(t *testing.T) {
 	}
 }
 
-func TestCalculateLargestRemainderUsesStableOrder(t *testing.T) {
+func TestCalculateCashReceivesRoundingRemainder(t *testing.T) {
 	plan := activePlan(
 		Destination{ID: "b", Name: "港美股", Active: true, AllocationBPS: 3333, SortOrder: 2},
 		Destination{ID: "a", Name: "A股", Active: true, AllocationBPS: 3333, SortOrder: 1},
@@ -87,6 +87,88 @@ func TestCalculateLargestRemainderUsesStableOrder(t *testing.T) {
 	}
 	if byName["现金"] != 400 || byName["A股"] != 300 || byName["港美股"] != 300 {
 		t.Fatalf("unexpected largest remainder allocation: %#v", byName)
+	}
+}
+
+func TestCalculateCashReceivesRemainderBeforeLargerNonCashRemainders(t *testing.T) {
+	plan := activePlan(
+		Destination{ID: "a", Name: "A股", Active: true, AllocationBPS: 5500, SortOrder: 1},
+		Destination{ID: "b", Name: "债券", Active: true, AllocationBPS: 3500, SortOrder: 2},
+		Destination{ID: "cash", Name: " 现金 ", Active: true, AllocationBPS: 1000, SortOrder: 3},
+	)
+	plan.ReserveCents = 0
+	plan.RoundingUnitCents = 100
+	result, err := Calculate(plan, MonthlyInput{Month: "2026-07", IncomeCents: 1000, ContributionBPS: 10000}, plan.Destinations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]int64{}
+	for _, allocation := range result.Allocations {
+		byName[allocation.Name] = allocation.RecommendedCents
+	}
+	if byName["A股"] != 500 || byName["债券"] != 300 || byName[" 现金 "] != 200 {
+		t.Fatalf("cash must absorb the exact remainder: %#v", byName)
+	}
+}
+
+func TestCalculateCashReceivesRecommendationLooseChange(t *testing.T) {
+	plan := activePlan(
+		Destination{ID: "stock", Name: "A股", Active: true, AllocationBPS: 7000, SortOrder: 1},
+		Destination{ID: "cash", Name: "现金", Active: true, AllocationBPS: 3000, SortOrder: 2},
+	)
+	plan.ReserveCents = 0
+	result, err := Calculate(plan, MonthlyInput{Month: "2026-07", IncomeCents: 1_636_300, ContributionBPS: 10000}, plan.Destinations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]int64{}
+	for _, allocation := range result.Allocations {
+		byName[allocation.Name] = allocation.RecommendedCents
+	}
+	if result.RecommendedTotalCents != 1_636_300 || byName["A股"] != 1_140_000 || byName["现金"] != 496_300 {
+		t.Fatalf("cash must receive the full loose change: %#v", result)
+	}
+}
+
+func TestCalculateWithoutCashUsesStableLargestRemainder(t *testing.T) {
+	plan := activePlan(
+		Destination{ID: "b", Name: "港美股", Active: true, AllocationBPS: 3333, SortOrder: 2},
+		Destination{ID: "a", Name: "A股", Active: true, AllocationBPS: 3333, SortOrder: 1},
+		Destination{ID: "c", Name: "债券", Active: true, AllocationBPS: 3334, SortOrder: 3},
+		Destination{ID: "cash", Name: "现金", Active: false, AllocationBPS: 0, SortOrder: 4},
+	)
+	plan.ReserveCents = 0
+	plan.RoundingUnitCents = 100
+	result, err := Calculate(plan, MonthlyInput{Month: "2026-07", IncomeCents: 1000, ContributionBPS: 10000}, plan.Destinations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]int64{}
+	for _, allocation := range result.Allocations {
+		byName[allocation.Name] = allocation.RecommendedCents
+	}
+	if byName["债券"] != 400 || byName["A股"] != 300 || byName["港美股"] != 300 {
+		t.Fatalf("unexpected largest remainder allocation: %#v", byName)
+	}
+}
+
+func TestCalculateCashOnlyReceivesEveryCent(t *testing.T) {
+	plan := activePlan(Destination{ID: "cash", Name: "现金", Active: true, AllocationBPS: 10000})
+	plan.ReserveCents = 0
+	plan.RoundingUnitCents = 100
+	result, err := Calculate(plan, MonthlyInput{Month: "2026-07", IncomeCents: 199, ContributionBPS: 10000}, plan.Destinations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.RecommendedTotalCents != 199 || result.Allocations[0].RecommendedCents != 199 {
+		t.Fatalf("cash-only allocation must receive the exact recommendation: %#v", result)
+	}
+	below, err := Calculate(plan, MonthlyInput{Month: "2026-08", IncomeCents: 99, ContributionBPS: 10000}, plan.Destinations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if below.RecommendedTotalCents != 99 || below.Allocations[0].RecommendedCents != 99 {
+		t.Fatalf("cash must receive amounts below one unit: %#v", below)
 	}
 }
 

@@ -1,28 +1,4 @@
-# Purpose
-
-定义定投计划器的响应式界面、可访问反馈、流程导航、投资标的排序及外观设置规则。
-## Requirements
-### Requirement: Present a coherent responsive planner interface
-系统 SHALL 使用一致的视觉层级、间距、控件状态和响应式布局呈现计划列表、计划设置、月度录入、结果与历史，并在桌面和窄屏设备上保持主要内容及操作可读可用。
-
-#### Scenario: Use the planner on a narrow screen
-- **WHEN** 用户在窄屏设备打开计划设置或月度录入
-- **THEN** 系统 SHALL 将多列内容重排为单列或可滚动布局，且不得遮挡主要动作、字段标签或校验信息
-
-#### Scenario: Scan a complex form
-- **WHEN** 用户打开包含多个配置项的设置或月度录入页面
-- **THEN** 系统 SHALL 使用标题、说明、摘要和分区卡片明确当前状态、输入顺序与主要动作
-
-### Requirement: Provide accessible feedback and motion
-系统 SHALL 为加载、保存、无数据、校验失败和成功状态提供就近、可被辅助技术识别的反馈，并仅使用不阻碍操作的轻量过渡与进入动效。
-
-#### Scenario: Save a form
-- **WHEN** 用户提交设置或月度记录
-- **THEN** 系统 SHALL 禁用重复提交、展示进行中状态，并在完成后明确展示成功或失败结果
-
-#### Scenario: Prefer reduced motion
-- **WHEN** 操作系统启用了减少动态效果偏好
-- **THEN** 系统 SHALL 关闭非必要位移和进入动画，同时保留状态变化的可见反馈
+## MODIFIED Requirements
 
 ### Requirement: Keep primary actions and next steps clear
 系统 SHALL 在计划配置和月度录入流程中突出与当前意图匹配的主要动作，并根据当前计划状态说明用户可执行的下一步。计划配置页 SHALL 同时提供语义明确的“保存草稿”和“发布计划”动作，不得使用一个含义模糊的保存动作隐式开始计划。
@@ -42,17 +18,6 @@
 #### Scenario: Choose to publish
 - **WHEN** 用户点击发布计划
 - **THEN** 系统 SHALL 在操作期间阻止重复提交，并在成功后明确说明计划已开始且可进行月度录入
-
-### Requirement: Organize investment targets predictably
-系统 SHALL 支持用户按投资标的比例从高到低排序，也 SHALL 支持通过拖拽手动调整顺序，并在保存时提交与视觉顺序一致的 `sortOrder`。系统 SHALL 保留可通过键盘操作的上移、下移控件作为拖拽的替代方式。
-
-#### Scenario: Sort targets by allocation
-- **WHEN** 用户在投资标的设置中选择按比例排序
-- **THEN** 系统 SHALL 将启用标的按分配比例从高到低排列，并稳定保留比例相同项的原有先后顺序
-
-#### Scenario: Drag a target to a new position
-- **WHEN** 用户将一个投资标的拖到另一个标的的位置
-- **THEN** 系统 SHALL 立即更新显示顺序和各项 `sortOrder`，且保存后的概览与后续月度计算使用该顺序
 
 ### Requirement: Complete configuration with clear navigation and appearance controls
 系统 SHALL 使用稳定的计划 ID 路径在概览、设置、月度记录、历史记录和统计 Tab 之间切换。保存草稿或发布计划成功后系统 SHALL 展示与该动作结果一致的确认反馈；用户确认后 SHALL 返回该计划概览。应用 SHALL 提供至少三套可切换皮肤并记住用户选择。
@@ -80,6 +45,8 @@
 #### Scenario: Choose display mode
 - **WHEN** 用户切换亮色或暗色模式
 - **THEN** 系统 SHALL 立即以所选模式呈现所有页面，并在下次打开应用时恢复该选择
+
+## ADDED Requirements
 
 ### Requirement: Confirm permanent deletion of an unstarted plan
 系统 SHALL 在计划列表中只为服务端判定可永久删除的未开始计划展示“删除草稿”危险操作，并在执行前明确说明该操作不可恢复。删除期间系统 SHALL 阻止重复提交，成功后从列表移除该计划，失败时 SHALL 保留当前列表并展示原因。

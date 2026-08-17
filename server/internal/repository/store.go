@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"investplanner/server/internal/database"
 )
@@ -116,7 +117,7 @@ func (s *Store) SaveSource(userID string, source database.ExpenseSource) (databa
 func (s *Store) CreatePlan(userID, name string, defaults []string) (database.Plan, error) {
 	plan := database.Plan{
 		ID: uuid.NewString(), UserID: userID, Name: strings.TrimSpace(name), Status: "draft",
-		DefaultContributionBPS: 8000, ReserveCents: 0, RoundingUnitCents: 100, Version: 1,
+		DefaultContributionBPS: 8000, ReserveCents: 0, RoundingUnitCents: 10_000, Version: 1,
 	}
 	err := s.DB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&plan).Error; err != nil {
@@ -171,6 +172,9 @@ func (s *Store) UpdatePlan(userID string, plan database.Plan, destinations []dat
 			return err
 		}
 		if current.Version != expectedVersion {
+			return ErrConflict
+		}
+		if current.Status == "archived" {
 			return ErrConflict
 		}
 		var archivedAt *time.Time
@@ -279,6 +283,59 @@ func (s *Store) ArchivePlan(userID, planID string, expectedVersion int) error {
 		return ErrConflict
 	}
 	return nil
+}
+
+func (s *Store) CanDeletePlan(userID, planID string) (bool, error) {
+	var plan database.Plan
+	if err := s.DB.Where("id = ? AND user_id = ?", planID, userID).First(&plan).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, ErrNotFound
+		}
+		return false, err
+	}
+	if plan.Status != "draft" {
+		return false, nil
+	}
+	var records int64
+	if err := s.DB.Model(&database.MonthlyRecord{}).Where("plan_id = ?", planID).Count(&records).Error; err != nil {
+		return false, err
+	}
+	return records == 0, nil
+}
+
+func (s *Store) DeleteDraftPlan(userID, planID string, expectedVersion int) error {
+	return s.DB.Transaction(func(tx *gorm.DB) error {
+		var plan database.Plan
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND user_id = ?", planID, userID).First(&plan).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrNotFound
+			}
+			return err
+		}
+		if plan.Version != expectedVersion || plan.Status != "draft" {
+			return ErrConflict
+		}
+		var records int64
+		if err := tx.Model(&database.MonthlyRecord{}).Where("plan_id = ?", planID).Count(&records).Error; err != nil {
+			return err
+		}
+		if records > 0 {
+			return ErrConflict
+		}
+		if err := tx.Where("plan_id = ?", planID).Delete(&database.PlanDestination{}).Error; err != nil {
+			return err
+		}
+		result := tx.Where("id = ? AND user_id = ? AND version = ? AND status = ?", planID, userID, expectedVersion, "draft").
+			Delete(&database.Plan{})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return ErrConflict
+		}
+		return nil
+	})
 }
 
 func (s *Store) GetMonth(userID, planID, month string) (database.MonthlyRecord, error) {
