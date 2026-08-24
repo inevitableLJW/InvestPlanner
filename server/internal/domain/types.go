@@ -21,12 +21,16 @@ const (
 )
 
 type Destination struct {
-	ID            string
-	Name          string
-	Active        bool
-	Archived      bool
-	SortOrder     int
-	AllocationBPS int
+	ID                 string
+	Name               string
+	Active             bool
+	Archived           bool
+	SortOrder          int
+	AllocationBPS      int
+	ExecutionMode      string
+	SettlementCurrency string
+	BenchmarkID        string
+	FXQuotaRelevant    bool
 }
 
 type Plan struct {

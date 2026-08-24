@@ -49,18 +49,99 @@ type Plan struct {
 }
 
 type PlanDestination struct {
-	ID            string `gorm:"type:char(36);primaryKey"`
-	PlanID        string `gorm:"type:char(36);not null;index"`
-	Name          string `gorm:"size:100;not null"`
-	NameKey       string `gorm:"size:100;not null;index"`
-	Active        bool   `gorm:"not null;default:true"`
-	AllocationBPS int    `gorm:"not null;default:0"`
-	SortOrder     int    `gorm:"not null"`
-	ArchivedAt    *time.Time
-	Version       int `gorm:"not null;default:1"`
+	ID                 string `gorm:"type:char(36);primaryKey"`
+	PlanID             string `gorm:"type:char(36);not null;index"`
+	Name               string `gorm:"size:100;not null"`
+	NameKey            string `gorm:"size:100;not null;index"`
+	Active             bool   `gorm:"not null;default:true"`
+	AllocationBPS      int    `gorm:"not null;default:0"`
+	ExecutionMode      string `gorm:"size:24;not null;default:unknown;index"`
+	SettlementCurrency string `gorm:"size:8;not null;default:unknown"`
+	BenchmarkID        string `gorm:"size:80;not null;default:'';index"`
+	FXQuotaRelevant    bool   `gorm:"not null;default:false"`
+	SortOrder          int    `gorm:"not null"`
+	ArchivedAt         *time.Time
+	Version            int `gorm:"not null;default:1"`
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	Plan               Plan `gorm:"constraint:OnDelete:CASCADE"`
+}
+
+type FundShare struct {
+	ID            string     `gorm:"type:char(36);primaryKey"`
+	FundCode      string     `gorm:"size:32;not null;uniqueIndex:idx_fund_share_code_class"`
+	ShareClass    string     `gorm:"size:16;not null;uniqueIndex:idx_fund_share_code_class"`
+	Name          string     `gorm:"size:160;not null"`
+	Venue         string     `gorm:"size:16;not null;index"`
+	Active        bool       `gorm:"not null;default:true;index"`
+	EffectiveFrom time.Time  `gorm:"not null;index"`
+	EffectiveTo   *time.Time `gorm:"index"`
+	CreatedBy     string     `gorm:"type:char(36);not null"`
+	UpdatedBy     string     `gorm:"type:char(36);not null"`
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
-	Plan          Plan `gorm:"constraint:OnDelete:CASCADE"`
+}
+
+type BenchmarkMapping struct {
+	ID                   string     `gorm:"type:char(36);primaryKey"`
+	FundShareID          string     `gorm:"type:char(36);not null;index"`
+	BenchmarkID          string     `gorm:"size:80;not null;index"`
+	FundReturnBasis      string     `gorm:"size:24;not null"`
+	BenchmarkReturnBasis string     `gorm:"size:24;not null"`
+	EffectiveFrom        time.Time  `gorm:"not null;index"`
+	EffectiveTo          *time.Time `gorm:"index"`
+	CreatedBy            string     `gorm:"type:char(36);not null"`
+	UpdatedBy            string     `gorm:"type:char(36);not null"`
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+	FundShare            FundShare `gorm:"constraint:OnDelete:CASCADE"`
+}
+
+type SalesChannel struct {
+	ID            string     `gorm:"type:char(36);primaryKey"`
+	Code          string     `gorm:"size:40;not null;uniqueIndex"`
+	Name          string     `gorm:"size:80;not null"`
+	Provider      string     `gorm:"size:40;not null"`
+	Active        bool       `gorm:"not null;default:true"`
+	EffectiveFrom time.Time  `gorm:"not null;index"`
+	EffectiveTo   *time.Time `gorm:"index"`
+	CreatedBy     string     `gorm:"type:char(36);not null"`
+	UpdatedBy     string     `gorm:"type:char(36);not null"`
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+type ChannelLimitOverride struct {
+	ID                   string `gorm:"type:char(36);primaryKey"`
+	UserID               string `gorm:"type:char(36);not null;index"`
+	FundShareID          string `gorm:"type:char(36);not null;index"`
+	SalesChannelID       string `gorm:"type:char(36);not null;index"`
+	DailyLimitCents      *int64
+	MinimumPurchaseCents *int64
+	PurchaseStatus       string     `gorm:"size:24;not null;default:unknown"`
+	Source               string     `gorm:"size:120;not null"`
+	EffectiveFrom        time.Time  `gorm:"not null;index"`
+	EffectiveTo          *time.Time `gorm:"index"`
+	CreatedBy            string     `gorm:"type:char(36);not null"`
+	UpdatedBy            string     `gorm:"type:char(36);not null"`
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+}
+
+type MarketDataSnapshot struct {
+	ID             string    `gorm:"type:char(36);primaryKey"`
+	DataType       string    `gorm:"size:40;not null;index:idx_snapshot_identity"`
+	EntityKey      string    `gorm:"size:120;not null;index:idx_snapshot_identity"`
+	Provider       string    `gorm:"size:40;not null"`
+	SourceURL      string    `gorm:"size:512;not null"`
+	ObservedAt     time.Time `gorm:"not null;index"`
+	FetchedAt      time.Time `gorm:"not null;index"`
+	Status         string    `gorm:"size:16;not null;index"`
+	RawHash        string    `gorm:"type:char(64);not null"`
+	ErrorCode      string    `gorm:"size:64;not null;default:''"`
+	NormalizedJSON []byte    `gorm:"type:json;not null"`
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 type MonthlyRecord struct {

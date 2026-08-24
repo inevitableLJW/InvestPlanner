@@ -114,7 +114,7 @@ func (s *Store) SaveSource(userID string, source database.ExpenseSource) (databa
 	return source, s.DB.Where("id = ? AND user_id = ?", source.ID, userID).First(&source).Error
 }
 
-func (s *Store) CreatePlan(userID, name string, defaults []string) (database.Plan, error) {
+func (s *Store) CreatePlan(userID, name string, defaults []database.PlanDestination) (database.Plan, error) {
 	plan := database.Plan{
 		ID: uuid.NewString(), UserID: userID, Name: strings.TrimSpace(name), Status: "draft",
 		DefaultContributionBPS: 8000, ReserveCents: 0, RoundingUnitCents: 10_000, Version: 1,
@@ -123,11 +123,15 @@ func (s *Store) CreatePlan(userID, name string, defaults []string) (database.Pla
 		if err := tx.Create(&plan).Error; err != nil {
 			return err
 		}
-		for index, destinationName := range defaults {
-			destination := database.PlanDestination{
-				ID: uuid.NewString(), PlanID: plan.ID, Name: destinationName, NameKey: normalize(destinationName),
-				Active: true, AllocationBPS: 0, SortOrder: index, Version: 1,
-			}
+		for index, template := range defaults {
+			destination := template
+			destination.ID = uuid.NewString()
+			destination.PlanID = plan.ID
+			destination.NameKey = normalize(destination.Name)
+			destination.Active = true
+			destination.AllocationBPS = 0
+			destination.SortOrder = index
+			destination.Version = 1
 			if err := tx.Create(&destination).Error; err != nil {
 				return err
 			}
@@ -229,6 +233,8 @@ func (s *Store) UpdatePlan(userID string, plan database.Plan, destinations []dat
 						"name": destination.Name, "name_key": destination.NameKey,
 						"active": destination.Active, "allocation_bps": destination.AllocationBPS,
 						"sort_order": destination.SortOrder, "version": gorm.Expr("version + 1"),
+						"execution_mode": destination.ExecutionMode, "settlement_currency": destination.SettlementCurrency,
+						"benchmark_id": destination.BenchmarkID, "fx_quota_relevant": destination.FXQuotaRelevant,
 					})
 				if result.Error != nil {
 					return result.Error

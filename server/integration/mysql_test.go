@@ -138,6 +138,36 @@ func TestAuthenticationLifecycleAndIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	planID := plan["id"].(string)
+	destinations := plan["destinations"].([]any)
+	if cash := destinations[0].(map[string]any); cash["executionMode"] != "local" || cash["settlementCurrency"] != "CNY" || cash["fxQuotaRelevant"] != false {
+		t.Fatalf("cash preset profile=%#v", cash)
+	}
+	if qdii := destinations[2].(map[string]any); qdii["executionMode"] != "qdii" || qdii["settlementCurrency"] != "CNY" || qdii["benchmarkId"] != "NASDAQ100_TR" {
+		t.Fatalf("QDII preset profile=%#v", qdii)
+	}
+
+	for _, raw := range destinations {
+		destination := raw.(map[string]any)
+		destination["executionMode"] = "direct_us"
+		destination["settlementCurrency"] = "USD"
+		destination["benchmarkId"] = "wrong"
+		destination["fxQuotaRelevant"] = true
+	}
+	updated := requestJSON(t, router, http.MethodPut, "/api/v1/plans/"+planID, map[string]any{
+		"name": "长期计划", "action": "save_draft", "defaultContributionBps": 8000,
+		"reserveCents": 0, "roundingUnitCents": 10000, "version": plan["version"], "destinations": destinations,
+	}, first)
+	if updated.Code != http.StatusOK {
+		t.Fatalf("update plan status=%d body=%s", updated.Code, updated.Body.String())
+	}
+	var updatedPlan map[string]any
+	if err := json.Unmarshal(updated.Body.Bytes(), &updatedPlan); err != nil {
+		t.Fatal(err)
+	}
+	updatedCash := updatedPlan["destinations"].([]any)[0].(map[string]any)
+	if updatedCash["executionMode"] != "local" || updatedCash["settlementCurrency"] != "CNY" || updatedCash["benchmarkId"] != "" || updatedCash["fxQuotaRelevant"] != false {
+		t.Fatalf("server did not enforce preset profile: %#v", updatedCash)
+	}
 
 	second := register(t, router, "second-user")
 	crossUser := requestJSON(t, router, http.MethodGet, "/api/v1/plans/"+planID, nil, second)
@@ -201,5 +231,18 @@ func TestSessionRestoreCookieAndExpiry(t *testing.T) {
 	expired := requestJSON(t, router, http.MethodGet, "/api/v1/auth/me", nil, expiring)
 	if expired.Code != http.StatusUnauthorized {
 		t.Fatalf("expired session status=%d body=%s", expired.Code, expired.Body.String())
+	}
+	legacy := register(t, router, "legacy-session-user")
+	if err := db.Model(&database.Session{}).
+		Where("token_hash = ?", service.HashToken(legacy.Value)).
+		Updates(map[string]any{
+			"created_at": time.Now().Add(-2 * time.Hour),
+			"expires_at": time.Now().Add(24 * time.Hour),
+		}).Error; err != nil {
+		t.Fatal(err)
+	}
+	shortened := requestJSON(t, router, http.MethodGet, "/api/v1/auth/me", nil, legacy)
+	if shortened.Code != http.StatusUnauthorized {
+		t.Fatalf("shortened session status=%d body=%s", shortened.Code, shortened.Body.String())
 	}
 }

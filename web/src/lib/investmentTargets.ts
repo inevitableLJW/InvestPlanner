@@ -1,4 +1,4 @@
-import type { Destination } from '../types'
+import type { Destination, ExecutionMode } from '../types'
 
 export const COMMON_INVESTMENT_TARGETS = [
   '现金',
@@ -18,6 +18,30 @@ export const COMMON_INVESTMENT_TARGETS = [
 
 export const CUSTOM_TARGET_VALUE = '__custom__'
 export const ALLOCATION_PERCENT_OPTIONS = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 60, 70, 75, 80, 90, 100]
+
+export interface InvestmentTargetMarketProfile {
+  executionMode: ExecutionMode
+  settlementCurrency: 'unknown' | 'CNY' | 'USD' | 'HKD'
+  benchmarkId: string
+  fxQuotaRelevant: boolean
+}
+
+const localProfile: InvestmentTargetMarketProfile = { executionMode: 'local', settlementCurrency: 'CNY', benchmarkId: '', fxQuotaRelevant: false }
+const PRESET_MARKET_PROFILES: Record<(typeof COMMON_INVESTMENT_TARGETS)[number], InvestmentTargetMarketProfile> = {
+  '现金': localProfile,
+  '债券类基金': localProfile,
+  '纳斯达克100指数（QDII）': { executionMode: 'qdii', settlementCurrency: 'CNY', benchmarkId: 'NASDAQ100_TR', fxQuotaRelevant: false },
+  '标普500指数（QDII）': { executionMode: 'qdii', settlementCurrency: 'CNY', benchmarkId: 'SP500_TR', fxQuotaRelevant: false },
+  '红利低波': localProfile,
+  'A股主动基金': localProfile,
+  '沪深300指数基金': localProfile,
+  '中证500指数基金': localProfile,
+  'A股': localProfile,
+  '港股': { executionMode: 'direct_hk', settlementCurrency: 'HKD', benchmarkId: '', fxQuotaRelevant: true },
+  '美股': { executionMode: 'direct_us', settlementCurrency: 'USD', benchmarkId: '', fxQuotaRelevant: true },
+  '纳斯达克100指数（美股）': { executionMode: 'direct_us', settlementCurrency: 'USD', benchmarkId: '', fxQuotaRelevant: true },
+  '标普500指数（美股）': { executionMode: 'direct_us', settlementCurrency: 'USD', benchmarkId: '', fxQuotaRelevant: true },
+}
 
 const LEGACY_TARGET_NAMES: Record<string, string> = {
   '纳指（QDII）': '纳斯达克100指数（QDII）',
@@ -39,6 +63,16 @@ export function isCommonInvestmentTarget(name: string) {
 export function investmentTargetSelectValue(name: string) {
   const normalized = normalizeInvestmentTargetName(name)
   return isCommonInvestmentTarget(normalized) ? normalized : CUSTOM_TARGET_VALUE
+}
+
+export function presetMarketProfile(name: string): InvestmentTargetMarketProfile | undefined {
+  const normalized = normalizeInvestmentTargetName(name)
+  return PRESET_MARKET_PROFILES[normalized as (typeof COMMON_INVESTMENT_TARGETS)[number]]
+}
+
+export function withPresetMarketProfile(destination: Destination): Destination {
+  const profile = presetMarketProfile(destination.name)
+  return profile ? { ...destination, ...profile } : destination
 }
 
 export function allocationOptions(currentBps: number) {

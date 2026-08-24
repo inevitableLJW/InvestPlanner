@@ -8,6 +8,14 @@ x-invest-planner-settings:
   web-port: &web_port 3000
 
 services:
+  aktools:
+    image: ghcr.io/inevitableljw/invest-planner-aktools:latest
+    pull_policy: always
+    restart: unless-stopped
+    networks:
+      - backend
+      - egress
+
   mysql:
     image: mysql:8.4
     restart: unless-stopped
@@ -42,12 +50,17 @@ services:
       MYSQL_DATABASE: invest_planner
       MYSQL_USER: invest_planner
       MYSQL_PASSWORD: *mysql_password
-      COOKIE_SECURE: "false"
-      SESSION_TTL: 168h
+      COOKIE_SECURE: auto
+      SESSION_TTL: 1h
+      AKTOOLS_BASE_URL: http://aktools:8080
+      MARKET_DATA_PRODUCTION_APPROVED: "true"
+      FX_ASSISTANT_ENABLED: "false"
       TZ: Asia/Shanghai
     depends_on:
       mysql:
         condition: service_healthy
+      aktools:
+        condition: service_started
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
       interval: 10s
@@ -57,6 +70,7 @@ services:
     networks:
       - backend
       - frontend
+      - egress
 
   web:
     image: ghcr.io/inevitableljw/invest-planner-web:latest
@@ -82,6 +96,7 @@ networks:
   backend:
     internal: true
   frontend:
+  egress:
 
 # TrueNAS replaces 0.0.0.0 with the selected node IP when rendering the portal.
 x-portals:

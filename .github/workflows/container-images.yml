@@ -21,6 +21,8 @@ jobs:
             dockerfile: deploy/api.Dockerfile
           - image: invest-planner-web
             dockerfile: deploy/web.Dockerfile
+          - image: invest-planner-aktools
+            dockerfile: deploy/aktools.Dockerfile
     steps:
       - uses: actions/checkout@v4
 

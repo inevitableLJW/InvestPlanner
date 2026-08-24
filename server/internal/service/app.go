@@ -33,6 +33,8 @@ type App struct {
 	Store      *repository.Store
 	SessionTTL time.Duration
 	Now        func() time.Time
+	QDII       *QDIIService
+	FX         *FXService
 }
 
 type AuthResult struct {
@@ -106,9 +108,15 @@ func (a *App) Authenticate(token string) (database.User, error) {
 	if token == "" {
 		return database.User{}, repository.ErrNotFound
 	}
-	session, err := a.Store.FindActiveSession(HashToken(token), a.Now())
+	now := a.Now()
+	session, err := a.Store.FindActiveSession(HashToken(token), now)
 	if err != nil {
 		return database.User{}, err
+	}
+	// Enforce the current configured TTL as well as the stored expiry. This
+	// makes a TTL reduction apply to sessions created before a deployment.
+	if !now.Before(session.CreatedAt.Add(a.SessionTTL)) {
+		return database.User{}, repository.ErrNotFound
 	}
 	return session.User, nil
 }
@@ -121,11 +129,15 @@ func (a *App) Logout(token string) error {
 }
 
 type DestinationInput struct {
-	ID            string `json:"id"`
-	Name          string `json:"name"`
-	Active        bool   `json:"active"`
-	AllocationBPS int    `json:"allocationBps"`
-	SortOrder     int    `json:"sortOrder"`
+	ID                 string `json:"id"`
+	Name               string `json:"name"`
+	Active             bool   `json:"active"`
+	AllocationBPS      int    `json:"allocationBps"`
+	SortOrder          int    `json:"sortOrder"`
+	ExecutionMode      string `json:"executionMode"`
+	SettlementCurrency string `json:"settlementCurrency"`
+	BenchmarkID        string `json:"benchmarkId"`
+	FXQuotaRelevant    bool   `json:"fxQuotaRelevant"`
 }
 
 type PlanAction string
@@ -149,7 +161,19 @@ func (a *App) CreatePlan(userID, name string) (database.Plan, error) {
 	if strings.TrimSpace(name) == "" {
 		return database.Plan{}, fmt.Errorf("%w: plan name is required", ErrValidation)
 	}
-	return a.Store.CreatePlan(userID, name, defaultDestinations)
+	defaults := make([]database.PlanDestination, 0, len(defaultDestinations))
+	for _, destinationName := range defaultDestinations {
+		profile, ok := domain.PresetMarketProfile(destinationName)
+		if !ok {
+			return database.Plan{}, fmt.Errorf("missing system market profile for %q", destinationName)
+		}
+		defaults = append(defaults, database.PlanDestination{
+			Name: destinationName, ExecutionMode: profile.ExecutionMode,
+			SettlementCurrency: profile.SettlementCurrency, BenchmarkID: profile.BenchmarkID,
+			FXQuotaRelevant: profile.FXQuotaRelevant,
+		})
+	}
+	return a.Store.CreatePlan(userID, name, defaults)
 }
 
 func (a *App) UpdatePlan(userID, planID string, input PlanInput) (database.Plan, error) {
@@ -168,13 +192,32 @@ func (a *App) UpdatePlan(userID, planID string, input PlanInput) (database.Plan,
 	}
 	modelDestinations := make([]database.PlanDestination, 0, len(input.Destinations))
 	for _, destination := range input.Destinations {
+		if profile, ok := domain.PresetMarketProfile(destination.Name); ok {
+			destination.ExecutionMode = profile.ExecutionMode
+			destination.SettlementCurrency = profile.SettlementCurrency
+			destination.BenchmarkID = profile.BenchmarkID
+			destination.FXQuotaRelevant = profile.FXQuotaRelevant
+		}
+		if destination.ExecutionMode == "" {
+			destination.ExecutionMode = domain.ExecutionUnknown
+		}
+		if destination.SettlementCurrency == "" {
+			destination.SettlementCurrency = "unknown"
+		}
+		if err := domain.ValidateMarketProfile(destination.ExecutionMode, destination.SettlementCurrency, destination.BenchmarkID, destination.FXQuotaRelevant); err != nil {
+			return database.Plan{}, fmt.Errorf("%w: %v", ErrValidation, err)
+		}
 		plan.Destinations = append(plan.Destinations, domain.Destination{
 			ID: destination.ID, Name: destination.Name, Active: destination.Active,
 			AllocationBPS: destination.AllocationBPS, SortOrder: destination.SortOrder,
+			ExecutionMode: destination.ExecutionMode, SettlementCurrency: destination.SettlementCurrency,
+			BenchmarkID: destination.BenchmarkID, FXQuotaRelevant: destination.FXQuotaRelevant,
 		})
 		modelDestinations = append(modelDestinations, database.PlanDestination{
 			ID: destination.ID, PlanID: planID, Name: destination.Name, Active: destination.Active,
 			AllocationBPS: destination.AllocationBPS, SortOrder: destination.SortOrder,
+			ExecutionMode: destination.ExecutionMode, SettlementCurrency: destination.SettlementCurrency,
+			BenchmarkID: destination.BenchmarkID, FXQuotaRelevant: destination.FXQuotaRelevant,
 		})
 	}
 	if status == domain.PlanActive {
@@ -232,7 +275,9 @@ func planToDomain(plan database.Plan) domain.Plan {
 		result.Destinations = append(result.Destinations, domain.Destination{
 			ID: destination.ID, Name: destination.Name, Active: destination.Active,
 			Archived: destination.ArchivedAt != nil, SortOrder: destination.SortOrder,
-			AllocationBPS: destination.AllocationBPS,
+			AllocationBPS: destination.AllocationBPS, ExecutionMode: destination.ExecutionMode,
+			SettlementCurrency: destination.SettlementCurrency, BenchmarkID: destination.BenchmarkID,
+			FXQuotaRelevant: destination.FXQuotaRelevant,
 		})
 	}
 	return result

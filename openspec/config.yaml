@@ -1,20 +1,15 @@
 schema: spec-driven
 
-# Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+context: |
+  InvestPlanner 的产品、设计与实现讨论以中文为主。
+  缺失或无法确认的数据必须显示为 `--`，不得用虚构值或真实的零值代替。
 
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
+rules:
+  proposal:
+    - 使用中文撰写标题、背景、目标、非目标、影响与风险；仅代码标识符、命令、路径和标准术语可保留英文。
+  design:
+    - 使用中文撰写设计决策、数据流、异常处理、权衡与迁移方案；仅代码标识符、命令、路径和标准术语可保留英文。
+  specs:
+    - 使用中文撰写需求和场景；MUST、SHALL 等规范关键词可保留英文，但须配合清晰的中文语义。
+  tasks:
+    - tasks.md 必须使用中文撰写任务标题、步骤和验收说明；仅代码标识符、命令、路径和标准术语可保留英文。

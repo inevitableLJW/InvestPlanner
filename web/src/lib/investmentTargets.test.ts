@@ -9,8 +9,10 @@ import {
   fillRemainingAllocation,
   investmentTargetSelectValue,
   normalizeInvestmentTargetName,
+  presetMarketProfile,
   reorderDestinations,
   sortDestinationsByAllocation,
+  withPresetMarketProfile,
 } from './investmentTargets'
 
 const targets = (...items: Array<Partial<Destination> & Pick<Destination, 'name'>>): Destination[] => items.map((item, index) => ({
@@ -31,6 +33,16 @@ describe('investment target presets', () => {
     expect(normalizeInvestmentTargetName('纳指（QDII）')).toBe('纳斯达克100指数（QDII）')
     expect(normalizeInvestmentTargetName('A股指数基金（如沪深300）')).toBe('沪深300指数基金')
     expect(investmentTargetSelectValue('黄金 ETF')).toBe(CUSTOM_TARGET_VALUE)
+  })
+
+  it('assigns every preset a locked market profile and leaves custom targets unchanged', () => {
+    expect(COMMON_INVESTMENT_TARGETS.every(name => presetMarketProfile(name))).toBe(true)
+    expect(presetMarketProfile('现金')).toEqual({ executionMode: 'local', settlementCurrency: 'CNY', benchmarkId: '', fxQuotaRelevant: false })
+    expect(presetMarketProfile('纳指（QDII）')).toEqual({ executionMode: 'qdii', settlementCurrency: 'CNY', benchmarkId: 'NASDAQ100_TR', fxQuotaRelevant: false })
+    expect(presetMarketProfile('港股')).toEqual({ executionMode: 'direct_hk', settlementCurrency: 'HKD', benchmarkId: '', fxQuotaRelevant: true })
+    expect(presetMarketProfile('美股')).toEqual({ executionMode: 'direct_us', settlementCurrency: 'USD', benchmarkId: '', fxQuotaRelevant: true })
+    expect(presetMarketProfile('黄金 ETF')).toBeUndefined()
+    expect(withPresetMarketProfile({ name: '现金', active: true, archived: false, sortOrder: 0, allocationBps: 0, executionMode: 'direct_us', settlementCurrency: 'USD', benchmarkId: 'wrong', fxQuotaRelevant: true })).toMatchObject({ executionMode: 'local', settlementCurrency: 'CNY', benchmarkId: '', fxQuotaRelevant: false })
   })
 })
 

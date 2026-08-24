@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"investplanner/server/internal/config"
 	"investplanner/server/internal/repository"
 )
 
@@ -60,14 +61,25 @@ func (a *API) logout(c *gin.Context) {
 		return
 	}
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(sessionCookie, "", -1, "/", "", a.cfg.CookieSecure, true)
+	c.SetCookie(sessionCookie, "", -1, "/", "", a.cookieSecure(c), true)
 	c.Status(http.StatusNoContent)
 }
 
 func (a *API) setSessionCookie(c *gin.Context, token string) {
 	c.SetSameSite(http.SameSiteLaxMode)
 	maxAge := int(a.cfg.SessionTTL / time.Second)
-	c.SetCookie(sessionCookie, token, maxAge, "/", "", a.cfg.CookieSecure, true)
+	c.SetCookie(sessionCookie, token, maxAge, "/", "", a.cookieSecure(c), true)
+}
+
+func (a *API) cookieSecure(c *gin.Context) bool {
+	switch a.cfg.CookieSecureMode {
+	case config.CookieSecureAlways:
+		return true
+	case config.CookieSecureNever:
+		return false
+	default:
+		return requestScheme(c) == "https"
+	}
 }
 
 func userResponse(id, username string) gin.H {

@@ -65,15 +65,15 @@ docker compose up -d --build
 
 ### 方式二：在 TrueNAS 界面安装
 
-1. 推送本仓库后，确认 GitHub Actions 的 `Container images` 工作流成功，并将两个 GHCR Package 设置为 Public。
+1. 推送本仓库后，确认 GitHub Actions 的 `Container images` 工作流成功，并将 API、Web、AKTools 三个 GHCR Package 设置为 Public。
 2. 打开 **Apps > Discover Apps > 右上角菜单 > Install via YAML**，应用名填写 `invest-planner`。
 3. 粘贴 [`deploy/truenas-compose.yml`](deploy/truenas-compose.yml) 的内容。
 4. 只修改模板顶部 `x-invest-planner-settings` 配置区中的数据目录、MySQL 密码和 Web 端口。密码只需填写一次，建议使用至少 32 位的随机字符。
-5. 保存，等待三个容器健康。在应用详情页点击 **Web UI**，TrueNAS 会用 Node IP 打开 `http://NODE_IP:3000/`。
+5. 保存，等待四个容器健康。在应用详情页点击 **Web UI**，TrueNAS 会用 Node IP 打开 `http://NODE_IP:3000/`。
 
-模板会拉取 `linux/amd64` 或 `linux/arm64` 的 GHCR 镜像，适配常见 TrueNAS 主机架构。YAML anchors 会把顶部的设置复用到各服务；`x-portals` 中的 `host: 0.0.0.0` 表示由 TrueNAS 选用 Node IP，并不是让浏览器访问 `0.0.0.0`。
+模板会拉取 API、Web、AKTools 的 `linux/amd64` 或 `linux/arm64` GHCR 镜像，适配常见 TrueNAS 主机架构。`main` 分支发布完成后，在 TrueNAS 中更新或重新保存应用配置即可重新拉取 `latest` 镜像，无需自行构建或导入 AKTools。发布工作流还会生成 `v*` 和 `sha-*` 标签；如需可复现部署或回滚，可把三个镜像统一改为同一发布标签。YAML anchors 会把顶部的设置复用到各服务；`x-portals` 中的 `host: 0.0.0.0` 表示由 TrueNAS 选用 Node IP，并不是让浏览器访问 `0.0.0.0`。
 
-如果通过 HTTPS 反向代理对外提供服务，请确保代理保留 `Host` 并传递 `X-Forwarded-Proto=https`，同时设置 `COOKIE_SECURE=true`；前后端分开部署时还需把 `WEB_ORIGIN`（或 `.env` 中的 `APP_URL`）设为精确的 `https://域名`。不要在公网直接暴露 MySQL 或本项目的 HTTP 端口。
+`COOKIE_SECURE=auto` 会根据直接 TLS 连接或 `X-Forwarded-Proto` 动态设置 Cookie 的 `Secure` 属性：当前直接 HTTP 访问保持关闭，通过 HTTPS 反向代理访问时自动开启。HTTPS 反向代理必须保留 `Host` 并传递 `X-Forwarded-Proto=https`；前后端分开部署时还需把 `WEB_ORIGIN`（或 `.env` 中的 `APP_URL`）设为精确的 `https://域名`。不要在公网直接暴露 MySQL 或本项目的 HTTP 端口。
 
 首次初始化后再修改 `MYSQL_PASSWORD` 不会自动修改数据库内已有账号密码；如需轮换密码，请先在 MySQL 中修改账号，再同步更新 Compose 配置。
 
@@ -81,7 +81,7 @@ docker compose up -d --build
 
 ```bash
 docker compose ps
-docker compose logs --tail=100 mysql api web
+docker compose logs --tail=100 mysql aktools api web
 ```
 
 ## 环境变量
@@ -91,8 +91,9 @@ docker compose logs --tail=100 mysql api web
 - `MYSQL_DSN`：完整的 MySQL DSN；也可改用 `MYSQL_HOST`、`MYSQL_PORT`、`MYSQL_DATABASE`、`MYSQL_USER` 和 `MYSQL_PASSWORD` 分项配置。生产环境必须使用独立强密码并限制数据库权限。
 - `WEB_ORIGIN`：允许携带 Cookie 的前端来源，必须是精确来源，不能使用通配符。
 - `APP_ENV=production`：启用生产安全行为。
-- `COOKIE_SECURE=true`：生产环境必须开启，并只通过 HTTPS 提供服务。
-- `SESSION_TTL`：Go duration 格式的服务端会话有效期，例如 `168h`。
+- `COOKIE_SECURE=auto`：根据请求协议动态设置 Cookie 的 `Secure` 属性；也可用 `true` 或 `false` 强制覆盖。
+- `SESSION_TTL`：Go duration 格式的固定服务端会话有效期，默认 `1h`，普通访问不会续期。
+- 市场数据与助手：固定版本、授权门禁、Tushare token、刷新/回滚和 `--` 语义见 [`docs/assistants.md`](docs/assistants.md) 与 [`docs/market-data.md`](docs/market-data.md)。
 
 前端变量见 `web/.env.example`，生产部署默认使用同源 `/api/v1`；如需覆盖可设置 `VITE_API_BASE_URL`。
 

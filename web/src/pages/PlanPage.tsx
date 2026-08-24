@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type CSSProperties, type FormEvent } from 'react'
 import { Link, NavLink, Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom'
+import { createPortal } from 'react-dom'
 import { AppIcon, TargetIcon } from '../components/AppIcon'
 import { APIError, del, get, put } from '../lib/api'
 import { fromYuan, parseYuanExpression, percent, toYuan, yuan } from '../lib/format'
@@ -13,16 +14,18 @@ import {
   fillRemainingAllocation,
   investmentTargetSelectValue,
   normalizeInvestmentTargetName,
+  presetMarketProfile,
   reorderDestinations,
   sortDestinationsByAllocation,
+  withPresetMarketProfile,
 } from '../lib/investmentTargets'
-import type { Destination, Expense, ExpenseSource, MonthRecord, Plan, PlanStats } from '../types'
+import type { Destination, ExecutionMode, Expense, ExpenseSource, FXForecast, MonthRecord, Plan, PlanStats, QDIIResult } from '../types'
 
 function usePlanData() {
   const { planId = '' } = useParams()
   const [plan, setPlan] = useState<Plan | null>(null)
   const [error, setError] = useState('')
-  useEffect(() => { void get<Plan>(`/plans/${planId}`).then(result => setPlan({ ...result, destinations: result.destinations.map(item => ({ ...item, name: normalizeInvestmentTargetName(item.name) })) })).catch(reason => setError(reason.message)) }, [planId])
+  useEffect(() => { void get<Plan>(`/plans/${planId}`).then(result => setPlan({ ...result, destinations: result.destinations.map(item => withPresetMarketProfile({ ...item, name: normalizeInvestmentTargetName(item.name), executionMode: item.executionMode ?? 'unknown', settlementCurrency: item.settlementCurrency ?? 'unknown', benchmarkId: item.benchmarkId ?? '', fxQuotaRelevant: item.fxQuotaRelevant ?? false })) })).catch(reason => setError(reason.message)) }, [planId])
   return { planId, plan, setPlan, error }
 }
 
@@ -88,14 +91,25 @@ function Settings({ plan, onSaved }: { plan: Plan; onSaved(plan: Plan): void }) 
   const addDestination = () => {
     const used = new Set(draft.destinations.map(item => item.name.trim()))
     const nextPreset = COMMON_INVESTMENT_TARGETS.find(name => !used.has(name))
-    setDraft(current => ({ ...current, destinations: [...current.destinations, { name: nextPreset ?? '', active: true, archived: false, sortOrder: current.destinations.length, allocationBps: 0 }] }))
+    const profile = presetMarketProfile(nextPreset ?? '') ?? { executionMode: 'unknown' as const, settlementCurrency: 'unknown' as const, benchmarkId: '', fxQuotaRelevant: false }
+    setDraft(current => ({ ...current, destinations: [...current.destinations, { name: nextPreset ?? '', active: true, archived: false, sortOrder: current.destinations.length, allocationBps: 0, ...profile }] }))
   }
   const remove = (index: number) => setDraft(current => ({ ...current, destinations: current.destinations.filter((_, itemIndex) => itemIndex !== index).map((item, itemIndex) => ({ ...item, sortOrder: itemIndex })) }))
   const move = (index: number, delta: number) => setDraft(current => ({ ...current, destinations: reorderDestinations(current.destinations, index, index + delta) }))
   const reorder = (fromIndex: number, toIndex: number) => setDraft(current => ({ ...current, destinations: reorderDestinations(current.destinations, fromIndex, toIndex) }))
   const selectTarget = (index: number, value: string) => {
     const current = draft.destinations[index]
-    updateDestination(index, { name: value === CUSTOM_TARGET_VALUE ? (investmentTargetSelectValue(current.name) === CUSTOM_TARGET_VALUE ? current.name : '') : value })
+    if (value === CUSTOM_TARGET_VALUE) {
+      updateDestination(index, investmentTargetSelectValue(current.name) === CUSTOM_TARGET_VALUE
+        ? { name: current.name }
+        : { name: '', executionMode: 'unknown', settlementCurrency: 'unknown', benchmarkId: '', fxQuotaRelevant: false })
+      return
+    }
+    updateDestination(index, { name: value, ...presetMarketProfile(value) })
+  }
+  const selectExecutionMode = (index: number, mode: ExecutionMode) => {
+    const profile = ({ unknown: ['unknown', false], local: ['CNY', false], qdii: ['CNY', false], direct_us: ['USD', true], direct_hk: ['HKD', true], stock_connect: ['CNY', false] } as const)[mode]
+    updateDestination(index, { executionMode: mode, settlementCurrency: profile[0], fxQuotaRelevant: profile[1], ...(mode === 'qdii' ? {} : { benchmarkId: '' }) })
   }
   const save = async (event: FormEvent) => {
     event.preventDefault(); setMessage('')
@@ -108,7 +122,7 @@ function Settings({ plan, onSaved }: { plan: Plan; onSaved(plan: Plan): void }) 
       const result = await put<Plan>(`/plans/${plan.id}`, {
         name: draft.name, action, defaultContributionBps: draft.defaultContributionBps,
         reserveCents: draft.reserveCents, roundingUnitCents: draft.roundingUnitCents, version: draft.version,
-        destinations: draft.destinations.map(item => ({ id: item.id ?? '', name: item.name.trim(), active: item.active, allocationBps: item.allocationBps, sortOrder: item.sortOrder, version: item.version ?? 0 })),
+        destinations: draft.destinations.map(item => { const resolved = withPresetMarketProfile(item); return { id: resolved.id ?? '', name: resolved.name.trim(), active: resolved.active, allocationBps: resolved.allocationBps, sortOrder: resolved.sortOrder, version: resolved.version ?? 0, executionMode: resolved.executionMode ?? 'unknown', settlementCurrency: resolved.settlementCurrency ?? 'unknown', benchmarkId: resolved.benchmarkId ?? '', fxQuotaRelevant: resolved.fxQuotaRelevant ?? false } }),
       })
       const normalized = { ...result, destinations: result.destinations.map(item => ({ ...item, name: normalizeInvestmentTargetName(item.name) })) }
       setDraft(normalized); onSaved(normalized); setSavedAction(action)
@@ -152,6 +166,8 @@ function Settings({ plan, onSaved }: { plan: Plan; onSaved(plan: Plan): void }) 
           <div className="target-fields">
             <label>标的类型<select aria-label={`投资标的 ${index + 1}`} value={targetValue} onChange={event => selectTarget(index, event.target.value)}>{COMMON_INVESTMENT_TARGETS.map(name => <option key={name} value={name}>{name}</option>)}<option value={CUSTOM_TARGET_VALUE}>＋ 自定义标的</option></select></label>
             {targetValue === CUSTOM_TARGET_VALUE && <label>自定义名称<input aria-label={`自定义标的名称 ${index + 1}`} required value={item.name} placeholder="输入列表外的投资标的" onChange={event => updateDestination(index, { name: event.target.value })} /></label>}
+            {targetValue === CUSTOM_TARGET_VALUE && <label>执行方式<select aria-label={`${item.name || `标的 ${index + 1}`}执行方式`} value={item.executionMode ?? 'unknown'} onChange={event => selectExecutionMode(index, event.target.value as ExecutionMode)}><option value="unknown">未分类（不推断）</option><option value="local">境内人民币</option><option value="qdii">QDII（人民币申购）</option><option value="direct_us">美股直投（USD）</option><option value="direct_hk">港股直投（HKD）</option><option value="stock_connect">港股通（人民币）</option></select><span className="field-help">结算币种：{item.settlementCurrency ?? 'unknown'} · {item.fxQuotaRelevant ? '计入换汇规划' : '不计入个人换汇'}</span></label>}
+            {targetValue === CUSTOM_TARGET_VALUE && item.executionMode === 'qdii' && <label>精确基准 ID<input aria-label={`${item.name || `标的 ${index + 1}`}精确基准 ID`} value={item.benchmarkId ?? ''} placeholder="例如 NASDAQ100_TR" onChange={event => updateDestination(index, { benchmarkId: event.target.value.trim() })} /><span className="field-help">留空时助手显示映射未配置，不按名称猜测。</span></label>}
           </div>
           <div className="allocation-field"><label>分配比例<select aria-label={`${item.name || `标的 ${index + 1}`}分配比例`} value={item.allocationBps / 100} onChange={event => updateDestination(index, { allocationBps: Number(event.target.value) * 100 })}>{allocationOptions(item.allocationBps).map(value => <option key={value} value={value}>{value}%</option>)}</select></label><button type="button" className="mini-action" disabled={!item.active || otherTotal > 10000} onClick={() => setDraft({ ...draft, destinations: fillRemainingAllocation(draft.destinations, index) })}>补足剩余</button></div>
           <div className="inline-actions"><button type="button" className="drag-handle" draggable aria-label={`拖动排序 ${item.name || `标的 ${index + 1}`}`} title="拖动调整顺序" onDragStart={event => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', String(index)); setDraggingIndex(index) }} onDragEnd={() => { setDraggingIndex(null); setDragOverIndex(null) }}>⠿</button><button type="button" aria-label="上移" disabled={index === 0} onClick={() => move(index, -1)}>↑</button><button type="button" aria-label="下移" disabled={index === draft.destinations.length - 1} onClick={() => move(index, 1)}>↓</button><button type="button" className="remove-action" onClick={() => remove(index)}>{item.archived ? '已归档' : '移除'}</button></div>
@@ -176,11 +192,21 @@ function MonthEditor({ plan }: { plan: Plan }) {
   const [record, setRecord] = useState<MonthRecord | null>(null)
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
+  const [qdiiOpen, setQDIIOpen] = useState(false)
+  const [qdiiResult, setQDIIResult] = useState<QDIIResult | null>(null)
+  const [qdiiLoading, setQDIILoading] = useState(false)
+  const [fxOpen, setFXOpen] = useState(false)
+  const [fxPreview, setFXPreview] = useState<FXForecast | null>(null)
+  const [fxLoading, setFXLoading] = useState(false)
+  const [fxWindow, setFXWindow] = useState<'rolling_12' | 'next_calendar_year'>('rolling_12')
+  const [scenarioUSD, setScenarioUSD] = useState('')
+  const [scenarioHKD, setScenarioHKD] = useState('')
   useEffect(() => {
     setRecord(null); setIncome(''); setRate(plan.defaultContributionBps / 100); setNote(''); setMessage('')
     void get<{ items: ExpenseSource[] }>('/expense-sources').then(result => setExpenses(blankExpenses(result.items)))
     void get<MonthRecord>(`/plans/${plan.id}/months/${month}`).then(result => { setRecord(result); setIncome(toYuan(result.incomeCents)); setRate(result.contributionBps / 100); setExpenses(result.expenses); setNote(result.note) }).catch(reason => { if (reason.status !== 404) setMessage(reason.message); else setRecord(null) })
   }, [plan.id, plan.defaultContributionBps, month])
+  useEffect(() => { void get<FXForecast>(`/plans/${plan.id}/assistants/fx?window=rolling_12`).then(setFXPreview).catch(() => setFXPreview(null)) }, [plan.id])
   const expenseTotal = expenses.reduce((sum, expense) => sum + expense.amountCents, 0)
   const parsedIncome = parseYuanExpression(income)
   const incomeIsValid = parsedIncome !== null
@@ -215,6 +241,21 @@ function MonthEditor({ plan }: { plan: Plan }) {
     } catch (reason) { setMessage(reason instanceof APIError ? reason.message : '更新失败，请稍后重试') }
     finally { setBusy(false) }
   }
+  const openQDII = async (allocation: MonthRecord['allocations'][number]) => {
+    setQDIIOpen(true); setQDIIResult(null); setQDIILoading(true)
+    const remaining = Math.max(allocation.recommendedCents - allocation.actualCents, 0)
+    try { setQDIIResult(await get<QDIIResult>(`/plans/${plan.id}/assistants/qdii/${allocation.destinationId}?remainingNeedCents=${remaining}`)) }
+    catch (reason) { setQDIIResult({ destinationId: allocation.destinationId, benchmarkId: '', status: 'unavailable', reason: reason instanceof APIError ? reason.message : '助手暂不可用', otc: [], etfs: [] }) }
+    finally { setQDIILoading(false) }
+  }
+  const loadFX = async (window = fxWindow) => {
+    setFXLoading(true)
+    const query = new URLSearchParams({ window }); if (scenarioUSD) query.set('scenarioUSD', scenarioUSD); if (scenarioHKD) query.set('scenarioHKD', scenarioHKD)
+    try { const result = await get<FXForecast>(`/plans/${plan.id}/assistants/fx?${query}`); setFXPreview(result) }
+    catch (reason) { setMessage(reason instanceof APIError ? reason.message : '年度换汇预测暂不可用') }
+    finally { setFXLoading(false) }
+  }
+  const openFX = () => { setFXOpen(true); void loadFX() }
   if (plan.status !== 'active') return <div className="empty panel page-enter"><span className="empty-icon">⌁</span><h2>先完成计划设置</h2><p>启用至少一个投资标的并把比例分配到 100%，就可以开始记录每月收支。</p><Link className="button primary" to="../settings">去设置投资标的</Link></div>
   return <div className="stack page-enter">
     {message && <div className={message.includes('失败') ? 'alert page-feedback' : 'success page-feedback'} role="status">{message}</div>}
@@ -236,11 +277,98 @@ function MonthEditor({ plan }: { plan: Plan }) {
       <div className="metric-grid"><Metric label="本月收入" value={yuan(record.incomeCents)} /><Metric label="本月支出" value={yuan(record.expenseTotalCents)} /><Metric label="可投入基数" value={yuan(record.investableBaseCents)} /><Metric label="建议投入" value={yuan(record.recommendedTotalCents)} accent /></div>
       {record.investableBaseCents === 0 && <div className="notice">收入扣除支出与预留金额后暂无可投入余额，本月建议为 0。</div>}
       <details className="formula"><summary>查看计算方式</summary><p>max(收入 − 支出 − 预留, 0) × {percent(record.contributionBps)}；{record.allocations.some(item => item.name.trim() === '现金') ? `非现金投资标的按 ${yuan(record.roundingUnitCents)} 向下取整，剩余尾差（包括零头）全部归入现金。` : `未启用现金时，建议总额按 ${yuan(record.roundingUnitCents)} 向下取整，投资标的尾差按最大余数法稳定分配。`}</p></details>
-      <div className="actual-list">{record.allocations.map((allocation, index) => <div className="actual-row" key={allocation.id}><TargetIcon name={allocation.name} /><div><strong>{allocation.name}</strong><span>建议 {yuan(allocation.recommendedCents)} · 占比 {percent(allocation.allocationBps)}</span></div><label>实际投入<div className="input-affix"><span>¥</span><input type="number" min="0" step="0.01" value={toYuan(allocation.actualCents)} onChange={event => setRecord({ ...record, allocations: record.allocations.map((item, itemIndex) => index === itemIndex ? { ...item, actualCents: fromYuan(event.target.value) } : item) })} /></div><small className={allocation.actualCents - allocation.recommendedCents >= 0 ? 'positive' : ''}>差额 {yuan(allocation.actualCents - allocation.recommendedCents)}</small></label></div>)}</div>
+      <AllocationList plan={plan} record={record} onRecord={setRecord} onQDII={openQDII} onFX={openFX} />
       <div className="result-actions"><div><span>实际投入合计</span><strong>{yuan(record.allocations.reduce((sum, item) => sum + item.actualCents, 0))}</strong></div><div className="actual-actions"><button type="button" className="button secondary" disabled={busy} onClick={() => void investAllByTarget()}>✓ 按建议全部投入</button><button type="button" className="button primary" disabled={busy} onClick={() => void updateActuals()}>保存实际投入</button></div></div>
     </section>}
+    {qdiiOpen && createPortal(<QDIIDrawer loading={qdiiLoading} result={qdiiResult} onClose={() => setQDIIOpen(false)} />, document.body)}
+    {fxOpen && createPortal(<FXDrawer loading={fxLoading} result={fxPreview} window={fxWindow} scenarioUSD={scenarioUSD} scenarioHKD={scenarioHKD} onWindow={value => { setFXWindow(value); void loadFX(value) }} onScenarioUSD={setScenarioUSD} onScenarioHKD={setScenarioHKD} onApply={() => void loadFX()} onClose={() => setFXOpen(false)} />, document.body)}
   </div>
 }
+
+function AllocationList({ plan, record, onRecord, onQDII, onFX }: { plan: Plan; record: MonthRecord; onRecord(record: MonthRecord): void; onQDII(allocation: MonthRecord['allocations'][number]): void; onFX(): void }) {
+  const profiles = new Map(plan.destinations.map(item => [item.id, item]))
+  const overseas = record.allocations.filter(item => { const profile = profiles.get(item.destinationId); return profile?.fxQuotaRelevant && (profile.executionMode === 'direct_us' || profile.executionMode === 'direct_hk') })
+  const usCount = overseas.filter(item => profiles.get(item.destinationId)?.executionMode === 'direct_us').length
+  const hkCount = overseas.filter(item => profiles.get(item.destinationId)?.executionMode === 'direct_hk').length
+  const marketCounts = [`${usCount ? `美股 ${usCount} 个标的` : ''}`, `${hkCount ? `港股 ${hkCount} 个标的` : ''}`].filter(Boolean).join(' · ')
+  const overseasIDs = new Set(overseas.map(item => item.id)); let grouped = false
+  const row = (allocation: MonthRecord['allocations'][number]) => {
+    const index = record.allocations.findIndex(item => item.id === allocation.id); const profile = profiles.get(allocation.destinationId)
+    return <div className="actual-row" key={allocation.id}><TargetIcon name={allocation.name} /><div><strong>{allocation.name}</strong><span>建议 {yuan(allocation.recommendedCents)} · 占比 {percent(allocation.allocationBps)}</span>{profile?.executionMode === 'qdii' && <button type="button" className="assistant-link" onClick={() => onQDII(allocation)}>查看同指数 QDII 基金助手</button>}</div><label>实际投入<div className="input-affix"><span>¥</span><input type="number" min="0" step="0.01" value={toYuan(allocation.actualCents)} onChange={event => onRecord({ ...record, allocations: record.allocations.map((item, itemIndex) => index === itemIndex ? { ...item, actualCents: fromYuan(event.target.value) } : item) })} /></div><small className={allocation.actualCents - allocation.recommendedCents >= 0 ? 'positive' : ''}>差额 {yuan(allocation.actualCents - allocation.recommendedCents)}</small></label></div>
+  }
+  return <div className="actual-list">{record.allocations.map(allocation => {
+    if (!overseasIDs.has(allocation.id)) return row(allocation)
+    if (grouped) return null; grouped = true
+    return <section className="overseas-group" key="overseas-direct"><div className="overseas-group-title"><div><span>OVERSEAS DIRECT</span><strong>海外直投标的</strong></div><small>{marketCounts}</small></div>{overseas.map(row)}<div className="overseas-group-action"><span>汇总 {overseas.length} 个海外标的</span><button type="button" className="button secondary compact" onClick={onFX}>查看换汇预测</button></div></section>
+  })}</div>
+}
+
+function DataValue({ value, money = false }: { value: { value: unknown; display: string; reason?: string; freshness: string }; money?: boolean }) {
+  const display = value.value == null ? '--' : money && typeof value.value === 'number' ? yuan(value.value) : value.display
+  return <span className={`data-value ${value.freshness}`} title={value.reason}>{display}{value.freshness === 'stale' && <small>陈旧</small>}</span>
+}
+function TrackingErrorValue({ value }: { value: QDIIResult['otc'][number]['trackingError'] }) {
+  const display = typeof value.value === 'number' ? `${(value.value * 100).toFixed(2)}%` : '--'
+  return <span className={`data-value ${value.freshness}`} title={value.reason}>{display}{value.freshness === 'stale' && <small>陈旧</small>}</span>
+}
+function trackingErrorFootnote(result: QDIIResult) {
+  const value = [...result.otc, ...result.etfs].map(item => item.trackingError).find(item => item.value != null)
+  if (!value) return ''
+  const details = value.display.match(/相对\s+(QQQ|SPY).*?(\d+)\s*个共同观测日.*?(\d{4}-\d{2}-\d{2})/)
+  if (details) return `* 年化跟踪误差按最近一年共同观测日计算；本表相对 ${details[1]}，共 ${details[2]} 个共同观测日，数据截至 ${details[3]}。`
+  const observedAt = value.observedAt?.slice(0, 10)
+  return `* 年化跟踪误差按最近一年共同观测日计算${observedAt ? `，数据截至 ${observedAt}` : ''}。`
+}
+function fundShareClassSuffix(value: string) {
+  const shareClass = value.trim()
+  return shareClass && shareClass.toLowerCase() !== 'unknown' ? ` · ${shareClass} 类` : ''
+}
+function QDIIDrawer({ loading, result, onClose }: { loading: boolean; result: QDIIResult | null; onClose(): void }) {
+  const [selectedOTC, setSelectedOTC] = useState<Set<string>>(new Set())
+  const [selectedETF, setSelectedETF] = useState('')
+  const [expandedOTC, setExpandedOTC] = useState(false)
+  useEffect(() => {
+    const candidates = result?.otc ?? []
+    const defaults = candidates.filter(item => item.purchaseStatus === 'open').slice(0, 2)
+    setSelectedOTC(new Set((defaults.length ? defaults : candidates.slice(0, 2)).map(item => item.fundCode)))
+    setSelectedETF(result?.etfs?.[0]?.fundCode ?? '')
+    setExpandedOTC(false)
+  }, [result])
+  const otc = result?.otc ?? []
+  const etfs = result?.etfs ?? []
+  const shownOTC = expandedOTC ? otc : otc.slice(0, 4)
+  const selectedCandidates = otc.filter(item => selectedOTC.has(item.fundCode))
+  const capacityKnown = selectedCandidates.every(item => item.executableCapacityCents.value != null)
+  const selectedCapacity = capacityKnown ? selectedCandidates.reduce((sum, item) => sum + (item.executableCapacityCents.value ?? 0), 0) : null
+  const target = otc[0]?.remainingNeedCents ?? 0
+  const gap = selectedCapacity == null ? null : Math.max(0, target - selectedCapacity)
+  const selectableOTC = otc.filter(item => item.purchaseStatus !== 'suspended')
+  const allSelected = selectableOTC.length > 0 && selectableOTC.every(item => selectedOTC.has(item.fundCode))
+  const trackingReason = otc.some(item => item.trackingError.value != null) ? undefined : otc.find(item => item.trackingError.value == null)?.trackingError.reason
+  const trackingFootnote = result ? trackingErrorFootnote(result) : ''
+  const etfUsesMarketPrice = etfs.some(item => item.trackingError.value != null && item.trackingError.display.includes('场内价格口径'))
+  const toggleOTC = (code: string) => { if (otc.find(item => item.fundCode === code)?.purchaseStatus === 'suspended') return; setSelectedOTC(current => { const next = new Set(current); if (next.has(code)) next.delete(code); else next.add(code); return next }) }
+  const toggleAll = () => setSelectedOTC(allSelected ? new Set() : new Set(selectableOTC.map(item => item.fundCode)))
+  return <div className="drawer-backdrop" role="presentation"><aside className="assistant-drawer qdii-drawer" role="dialog" aria-modal="true" aria-labelledby="qdii-title"><header><div><p className="section-kicker">QDII ASSISTANT</p><h2 id="qdii-title">同指数基金助手</h2><span>场外多选承接，场内 ETF 单选补足缺口</span></div><button type="button" aria-label="关闭 QDII 基金助手" onClick={onClose}>×</button></header>{loading ? <div className="drawer-loading"><span className="spinner" />正在读取最近快照…</div> : result?.status === 'unavailable' ? <div className="assistant-unavailable"><strong>--</strong><p>{result.reason || '市场数据暂不可用'}</p><span>月度实际投入仍可正常填写和保存。</span></div> : <div className="drawer-body qdii-body">
+    {trackingReason && <div className="data-notice"><strong>年化跟踪误差暂显示 --</strong><span>{trackingReason}</span></div>}
+    <section className="qdii-step"><div className="qdii-step-title"><b>1</b><div><h3>场外基金（多选）</h3><span>按真实渠道限额估算本月承接容量</span></div><strong>本月目标 {yuan(target)}</strong></div>
+      <div className="qdii-controls"><label><input type="checkbox" checked={allSelected} onChange={toggleAll} /> 全选</label><span>已选 {selectedOTC.size} 只</span><small>排序：申购状态 · 跟踪误差 · 基金代码</small></div>
+      <div className="qdii-table-wrap"><table className="qdii-table"><thead><tr><th>选择</th><th>基金</th><th>当前单日限额</th><th>年化跟踪误差</th><th>剩余可申购日</th><th>本月预计可投</th></tr></thead><tbody>{shownOTC.map(item => <tr key={item.fundCode} className={`${selectedOTC.has(item.fundCode) ? 'selected' : ''} ${item.purchaseStatus === 'suspended' ? 'disabled' : ''}`}><td><input type="checkbox" aria-label={`选择 ${item.name}`} checked={selectedOTC.has(item.fundCode)} disabled={item.purchaseStatus === 'suspended'} onChange={() => toggleOTC(item.fundCode)} /></td><td><strong>{item.name}</strong><span>{item.fundCode}{fundShareClassSuffix(item.shareClass)}</span><b className={`purchase ${item.purchaseStatus}`}>{item.purchaseStatus === 'open' ? '可申购' : item.purchaseStatus === 'suspended' ? '暂停申购' : '状态 --'}</b></td><td><DataValue value={item.dailyLimitCents} money /></td><td><TrackingErrorValue value={item.trackingError} /></td><td><DataValue value={item.remainingPurchaseDays} /></td><td><DataValue value={item.executableCapacityCents} money /></td></tr>)}</tbody></table></div>
+      {otc.length > 4 && <button type="button" className="qdii-expand" onClick={() => setExpandedOTC(value => !value)}>{expandedOTC ? '收起候选' : `查看全部（${otc.length}）`}</button>}
+      <div className="qdii-table-notes">{trackingFootnote && <small>{trackingFootnote}</small>}<small>* 当前单日限额为公开销售渠道观察值，仅供参考，以实际销售平台为准。</small></div>
+      <div className="qdii-total"><span>已选场外合计</span><strong>{selectedCapacity == null ? '--' : yuan(selectedCapacity)}</strong></div>
+      <div className="qdii-gap"><span>场内需承接</span><strong>{gap == null ? '--' : yuan(gap)}</strong></div>
+    </section>
+    <section className="qdii-step"><div className="qdii-step-title"><b>2</b><div><h3>场内承接</h3><span>单选一只精确映射 ETF 承接场外剩余缺口</span></div></div>
+      {etfs.length ? <div className="qdii-table-wrap"><table className="qdii-table etf-table"><thead><tr><th>选择</th><th>ETF 名称</th><th>价格</th><th>IOPV</th><th>溢价率</th><th>近一年年化跟踪误差</th></tr></thead><tbody>{etfs.map((item, index) => <tr key={item.fundCode} className={selectedETF === item.fundCode ? 'selected' : ''}><td><input type="radio" name="qdii-etf" aria-label={`选择 ${item.name}`} checked={selectedETF === item.fundCode} onChange={() => setSelectedETF(item.fundCode)} /></td><td><strong>{item.name}</strong><span>{item.fundCode}</span>{index === 0 && item.premiumRate.value != null && <b className="recommendation">低溢价率</b>}</td><td><DataValue value={item.price} /></td><td><DataValue value={item.iopv} /></td><td><DataValue value={item.premiumRate} /></td><td><TrackingErrorValue value={item.trackingError} /></td></tr>)}</tbody></table></div> : <div className="soft-empty"><p>-- · 暂无可用的精确映射 ETF 快照</p></div>}
+      {etfUsesMarketPrice && <div className="qdii-table-notes"><small>* 场内结果暂按交易价格相对 QQQ/SPY 计算，包含溢价波动；不等同于基金净值口径。</small></div>}
+      <div className="qdii-equation"><span>场外 <strong>{selectedCapacity == null ? '--' : yuan(selectedCapacity)}</strong></span><b>+</b><span>场内 <strong>{gap == null ? '--' : yuan(gap)}</strong></span><b>=</b><span>本月目标 <strong>{yuan(target)}</strong></span></div>
+    </section>
+  </div>}</aside></div>
+}
+
+function FXChart({ result }: { result: FXForecast }) { const points = result.months.filter(item => item.currency === result.currencies[0]); const known = points.map(item => item.cumulativeUsdEquivalent); const max = Math.max(1, ...known.map(value => value ?? 0)); const path = known.map((value, index) => value == null ? '' : `${index ? 'L' : 'M'} ${20 + index * 480 / Math.max(1, known.length - 1)} ${180 - value / max * 150}`).filter(Boolean).join(' '); return <div className="fx-chart" role="img" aria-label="年度累计 USD 等值需求曲线"><svg viewBox="0 0 520 210"><line x1="20" x2="500" y1="180" y2="180" /><path d={path} />{known.map((value,index) => value == null ? null : <circle key={index} cx={20 + index * 480 / Math.max(1, known.length - 1)} cy={180 - value / max * 150} r="3" />)}</svg></div> }
+function FXDrawer({ loading, result, window, scenarioUSD, scenarioHKD, onWindow, onScenarioUSD, onScenarioHKD, onApply, onClose }: { loading: boolean; result: FXForecast | null; window: 'rolling_12' | 'next_calendar_year'; scenarioUSD: string; scenarioHKD: string; onWindow(value: 'rolling_12' | 'next_calendar_year'): void; onScenarioUSD(value: string): void; onScenarioHKD(value: string): void; onApply(): void; onClose(): void }) { return <div className="drawer-backdrop" role="presentation"><aside className="assistant-drawer fx-drawer" role="dialog" aria-modal="true" aria-labelledby="fx-title"><header><div><p className="section-kicker">FX FORECAST</p><h2 id="fx-title">年度换汇预测</h2><span>从服务端权威月度建议派生</span></div><button type="button" aria-label="关闭年度换汇预测" onClick={onClose}>×</button></header><div className="drawer-body"><div className="window-switch" aria-label="预测窗口"><button className={window === 'rolling_12' ? 'active' : ''} onClick={() => onWindow('rolling_12')}>滚动 12 个月</button><button className={window === 'next_calendar_year' ? 'active' : ''} onClick={() => onWindow('next_calendar_year')}>下一自然年</button></div>{loading ? <div className="drawer-loading"><span className="spinner" />正在生成预测…</div> : result?.status === 'unavailable' ? <div className="assistant-unavailable"><strong>--</strong><p>{result.reason || '年度换汇预测暂不可用'}</p></div> : !result?.currencies.length ? <div className="assistant-unavailable"><strong>--</strong><p>计划没有需个人换汇的海外直投标的</p></div> : <><div className="fx-summaries">{result.summaries.map(item => <article key={item.currency}><span>{item.currency} 需求</span><strong>{item.foreignAmount == null ? '--' : item.foreignAmount.toLocaleString('zh-CN', { maximumFractionDigits: 2 })}</strong><small>{item.cnyCents == null ? '--' : yuan(item.cnyCents)}</small></article>)}</div><FXChart result={result} /><div className="scenario-grid">{result.currencies.includes('USD') && <label>USD 情景汇率<input type="number" min="0.0001" step="0.0001" placeholder="使用最新中间价" value={scenarioUSD} onChange={event => onScenarioUSD(event.target.value)} /></label>}{result.currencies.includes('HKD') && <label>HKD 情景汇率<input type="number" min="0.0001" step="0.0001" placeholder="使用最新中间价" value={scenarioHKD} onChange={event => onScenarioHKD(event.target.value)} /></label>}<button type="button" className="button secondary" onClick={onApply}>应用情景</button></div><div className="fx-months">{result.months.map(item => <div key={`${item.month}-${item.currency}`}><span>{item.month} · {item.currency}</span><strong>{item.foreignAmount == null ? '--' : item.foreignAmount.toLocaleString('zh-CN', { maximumFractionDigits: 2 })}</strong><small>{item.cnyCents == null ? item.reason || '--' : yuan(item.cnyCents)}</small></div>)}</div><section className="quota-notice"><strong>年度便利化额度参考：{result.quotaUsd.toLocaleString()} USD</strong><span>来源日期：{result.quotaEffectiveDate || '--'}</span><p>{result.complianceNotice}</p>{result.quotaSource && <a href={result.quotaSource} target="_blank" rel="noreferrer">查看官方来源</a>}</section></>}</div></aside></div> }
 
 function History({ plan }: { plan: Plan }) {
   const [items, setItems] = useState<MonthRecord[]>([])

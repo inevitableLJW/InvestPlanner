@@ -2,9 +2,47 @@ package config
 
 import (
 	"testing"
+	"time"
 
 	"github.com/go-sql-driver/mysql"
 )
+
+func TestParseCookieSecureMode(t *testing.T) {
+	tests := []struct {
+		raw  string
+		want CookieSecureMode
+	}{
+		{raw: "auto", want: CookieSecureAuto},
+		{raw: "true", want: CookieSecureAlways},
+		{raw: "false", want: CookieSecureNever},
+	}
+	for _, tt := range tests {
+		got, err := parseCookieSecureMode(tt.raw)
+		if err != nil || got != tt.want {
+			t.Fatalf("parseCookieSecureMode(%q) = %v, %v; want %v", tt.raw, got, err, tt.want)
+		}
+	}
+	if _, err := parseCookieSecureMode("HTTPS"); err == nil {
+		t.Fatal("expected invalid COOKIE_SECURE mode to fail")
+	}
+}
+
+func TestLoadDefaultsToOneHourAndAutomaticSecureCookie(t *testing.T) {
+	t.Setenv("MYSQL_DSN", "user:password@tcp(127.0.0.1:3306)/planner?parseTime=true")
+	t.Setenv("SESSION_TTL", "")
+	t.Setenv("COOKIE_SECURE", "")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SessionTTL != time.Hour {
+		t.Fatalf("SessionTTL = %s, want 1h", cfg.SessionTTL)
+	}
+	if cfg.CookieSecureMode != CookieSecureAuto {
+		t.Fatalf("CookieSecureMode = %v, want auto", cfg.CookieSecureMode)
+	}
+}
 
 func TestMySQLDSNFromEnvironment(t *testing.T) {
 	t.Setenv("MYSQL_HOST", "db.internal")
@@ -33,5 +71,28 @@ func TestMySQLDSNFromEnvironmentRequiresPassword(t *testing.T) {
 	t.Setenv("MYSQL_PASSWORD", "")
 	if _, err := mysqlDSNFromEnvironment(); err == nil {
 		t.Fatal("expected missing password error")
+	}
+}
+
+func TestProductionMarketDataRequiresExplicitApproval(t *testing.T) {
+	t.Setenv("MYSQL_DSN", "user:password@tcp(127.0.0.1:3306)/planner?parseTime=true")
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("MARKET_DATA_PRODUCTION_APPROVED", "false")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected always-on QDII production authorization gate")
+	}
+	t.Setenv("MARKET_DATA_PRODUCTION_APPROVED", "true")
+	if _, err := Load(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestQDIIDataHasNoDisableFlag(t *testing.T) {
+	t.Setenv("MYSQL_DSN", "user:password@tcp(127.0.0.1:3306)/planner?parseTime=true")
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("QDII_ASSISTANT_ENABLED", "false")
+	t.Setenv("MARKET_DATA_ENABLED", "false")
+	if _, err := Load(); err != nil {
+		t.Fatal(err)
 	}
 }

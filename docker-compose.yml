@@ -1,6 +1,19 @@
 name: invest-planner
 
 services:
+  aktools:
+    build:
+      context: .
+      dockerfile: deploy/aktools.Dockerfile
+      args:
+        AKTOOLS_VERSION: 0.0.91
+        AKSHARE_VERSION: 1.18.64
+    image: invest-planner-aktools:0.0.91-akshare-1.18.64
+    restart: unless-stopped
+    networks:
+      - backend
+      - egress
+
   mysql:
     image: mysql:8.4
     restart: unless-stopped
@@ -32,12 +45,18 @@ services:
       HTTP_ADDR: :8080
       MYSQL_DSN: ${MYSQL_USER:-invest_planner}:${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}@tcp(mysql:3306)/${MYSQL_DATABASE:-invest_planner}?charset=utf8mb4&parseTime=True&loc=Local
       WEB_ORIGIN: ${APP_URL:?set APP_URL in .env, for example http://192.168.1.10:3000}
-      COOKIE_SECURE: ${COOKIE_SECURE:-false}
-      SESSION_TTL: ${SESSION_TTL:-168h}
+      COOKIE_SECURE: ${COOKIE_SECURE:-auto}
+      SESSION_TTL: ${SESSION_TTL:-1h}
+      AKTOOLS_BASE_URL: http://aktools:8080
+      TUSHARE_TOKEN: ${TUSHARE_TOKEN:-}
+      MARKET_DATA_PRODUCTION_APPROVED: ${MARKET_DATA_PRODUCTION_APPROVED:-false}
+      FX_ASSISTANT_ENABLED: ${FX_ASSISTANT_ENABLED:-false}
       TZ: ${TZ:-Asia/Shanghai}
     depends_on:
       mysql:
         condition: service_healthy
+      aktools:
+        condition: service_started
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
       interval: 10s
@@ -47,6 +66,7 @@ services:
     networks:
       - backend
       - frontend
+      - egress
 
   web:
     image: ${WEB_IMAGE:-invest-planner-web:local}
@@ -72,3 +92,4 @@ networks:
   backend:
     internal: true
   frontend:
+  egress:

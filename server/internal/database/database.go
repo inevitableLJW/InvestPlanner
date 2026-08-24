@@ -8,6 +8,8 @@ import (
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
+
+	"investplanner/server/internal/domain"
 )
 
 func Open(dsn string) (*gorm.DB, error) {
@@ -152,6 +154,117 @@ func Migrate(db *gorm.DB) error {
 				return fmt.Errorf("migration 5 update plan rounding default: %w", err)
 			}
 			if err := tx.Create(&SchemaMigration{Version: 5, AppliedAt: time.Now().UTC()}).Error; err != nil {
+				return err
+			}
+		}
+
+		count = 0
+		if err := tx.Model(&SchemaMigration{}).Where("version = ?", 6).Count(&count).Error; err != nil {
+			return err
+		}
+		if count == 0 {
+			if err := tx.AutoMigrate(
+				&PlanDestination{}, &FundShare{}, &BenchmarkMapping{}, &SalesChannel{},
+				&ChannelLimitOverride{}, &MarketDataSnapshot{},
+			); err != nil {
+				return fmt.Errorf("migration 6 market data models: %w", err)
+			}
+			// Existing destinations are intentionally left unclassified. Product
+			// semantics forbid inferring execution mode from their display names.
+			if err := tx.Model(&PlanDestination{}).Where("execution_mode = '' OR execution_mode IS NULL").
+				Updates(map[string]any{"execution_mode": "unknown", "settlement_currency": "unknown", "fx_quota_relevant": false}).Error; err != nil {
+				return fmt.Errorf("migration 6 classify existing destinations: %w", err)
+			}
+			if err := tx.Create(&SchemaMigration{Version: 6, AppliedAt: time.Now().UTC()}).Error; err != nil {
+				return err
+			}
+		}
+
+		count = 0
+		if err := tx.Model(&SchemaMigration{}).Where("version = ?", 7).Count(&count).Error; err != nil {
+			return err
+		}
+		if count == 0 {
+			for _, preset := range domain.SystemPresets() {
+				names := append([]string{preset.Name}, preset.Aliases...)
+				if err := tx.Model(&PlanDestination{}).Where("name IN ?", names).Updates(map[string]any{
+					"execution_mode": preset.Profile.ExecutionMode, "settlement_currency": preset.Profile.SettlementCurrency,
+					"benchmark_id": preset.Profile.BenchmarkID, "fx_quota_relevant": preset.Profile.FXQuotaRelevant,
+				}).Error; err != nil {
+					return fmt.Errorf("migration 7 preset market profiles: %w", err)
+				}
+			}
+			if err := tx.Create(&SchemaMigration{Version: 7, AppliedAt: time.Now().UTC()}).Error; err != nil {
+				return err
+			}
+		}
+
+		count = 0
+		if err := tx.Model(&SchemaMigration{}).Where("version = ?", 8).Count(&count).Error; err != nil {
+			return err
+		}
+		if count == 0 {
+			if err := tx.Exec(`
+				INSERT INTO fund_shares
+					(id, fund_code, share_class, name, venue, active, effective_from, created_by, updated_by, created_at, updated_at)
+				VALUES
+					(UUID(), '270042', 'A', '广发纳斯达克100ETF联接人民币(QDII)A', 'otc', true, '2000-01-01', '00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000000', UTC_TIMESTAMP(3), UTC_TIMESTAMP(3)),
+					(UUID(), '006479', 'C', '广发纳斯达克100ETF联接人民币(QDII)C', 'otc', true, '2000-01-01', '00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000000', UTC_TIMESTAMP(3), UTC_TIMESTAMP(3)),
+					(UUID(), '050025', 'A', '博时标普500ETF联接A', 'otc', true, '2000-01-01', '00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000000', UTC_TIMESTAMP(3), UTC_TIMESTAMP(3)),
+					(UUID(), '006075', 'C', '博时标普500ETF联接C', 'otc', true, '2000-01-01', '00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000000', UTC_TIMESTAMP(3), UTC_TIMESTAMP(3))
+				ON DUPLICATE KEY UPDATE name = VALUES(name), venue = VALUES(venue), active = true, updated_at = UTC_TIMESTAMP(3)
+			`).Error; err != nil {
+				return fmt.Errorf("migration 8 seed QDII fund shares: %w", err)
+			}
+			if err := tx.Exec(`
+				INSERT INTO benchmark_mappings
+					(id, fund_share_id, benchmark_id, fund_return_basis, benchmark_return_basis, effective_from, created_by, updated_by, created_at, updated_at)
+				SELECT UUID(), id,
+					CASE WHEN fund_code IN ('270042', '006479') THEN 'NASDAQ100_TR' ELSE 'SP500_TR' END,
+					'adjusted_nav', 'total_return', '2000-01-01',
+					'00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000000', UTC_TIMESTAMP(3), UTC_TIMESTAMP(3)
+				FROM fund_shares
+				WHERE (fund_code, share_class) IN (('270042', 'A'), ('006479', 'C'), ('050025', 'A'), ('006075', 'C'))
+			`).Error; err != nil {
+				return fmt.Errorf("migration 8 seed exact QDII benchmark mappings: %w", err)
+			}
+			if err := tx.Create(&SchemaMigration{Version: 8, AppliedAt: time.Now().UTC()}).Error; err != nil {
+				return err
+			}
+		}
+
+		count = 0
+		if err := tx.Model(&SchemaMigration{}).Where("version = ?", 9).Count(&count).Error; err != nil {
+			return err
+		}
+		if count == 0 {
+			if err := tx.Exec(`
+				INSERT INTO fund_shares
+					(id, fund_code, share_class, name, venue, active, effective_from, created_by, updated_by, created_at, updated_at)
+				VALUES
+					(UUID(), '513100', 'ETF', '纳指ETF国泰', 'etf', true, '2000-01-01', '00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000000', UTC_TIMESTAMP(3), UTC_TIMESTAMP(3)),
+					(UUID(), '159941', 'ETF', '纳指ETF广发', 'etf', true, '2000-01-01', '00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000000', UTC_TIMESTAMP(3), UTC_TIMESTAMP(3)),
+					(UUID(), '513300', 'ETF', '纳斯达克ETF华夏', 'etf', true, '2000-01-01', '00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000000', UTC_TIMESTAMP(3), UTC_TIMESTAMP(3)),
+					(UUID(), '513500', 'ETF', '标普500ETF博时', 'etf', true, '2000-01-01', '00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000000', UTC_TIMESTAMP(3), UTC_TIMESTAMP(3)),
+					(UUID(), '159612', 'ETF', '标普500ETF国泰', 'etf', true, '2000-01-01', '00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000000', UTC_TIMESTAMP(3), UTC_TIMESTAMP(3)),
+					(UUID(), '159655', 'ETF', '标普500ETF华夏', 'etf', true, '2000-01-01', '00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000000', UTC_TIMESTAMP(3), UTC_TIMESTAMP(3))
+				ON DUPLICATE KEY UPDATE name = VALUES(name), venue = VALUES(venue), active = true, updated_at = UTC_TIMESTAMP(3)
+			`).Error; err != nil {
+				return fmt.Errorf("migration 9 seed QDII ETFs: %w", err)
+			}
+			if err := tx.Exec(`
+				INSERT INTO benchmark_mappings
+					(id, fund_share_id, benchmark_id, fund_return_basis, benchmark_return_basis, effective_from, created_by, updated_by, created_at, updated_at)
+				SELECT UUID(), id,
+					CASE WHEN fund_code IN ('513100', '159941', '513300') THEN 'NASDAQ100_TR' ELSE 'SP500_TR' END,
+					'adjusted_nav', 'total_return', '2000-01-01',
+					'00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000000', UTC_TIMESTAMP(3), UTC_TIMESTAMP(3)
+				FROM fund_shares
+				WHERE share_class = 'ETF' AND fund_code IN ('513100', '159941', '513300', '513500', '159612', '159655')
+			`).Error; err != nil {
+				return fmt.Errorf("migration 9 seed exact QDII ETF mappings: %w", err)
+			}
+			if err := tx.Create(&SchemaMigration{Version: 9, AppliedAt: time.Now().UTC()}).Error; err != nil {
 				return err
 			}
 		}

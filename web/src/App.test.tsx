@@ -126,12 +126,14 @@ describe('investment target settings', () => {
       .mockImplementationOnce(() => json(plan))
     renderApp('/plans/p1/settings')
     expect(await screen.findByLabelText('投资标的 1')).toHaveValue('现金')
+    expect(screen.queryByText('执行方式')).not.toBeInTheDocument()
     expect(screen.getByLabelText(/向下取整单位/)).toHaveValue(100)
     expect(screen.getByText(/还剩 100% 待分配/)).toBeInTheDocument()
 
     await userEvent.selectOptions(screen.getByLabelText('投资标的 1'), '__custom__')
     await userEvent.type(screen.getByLabelText('自定义标的名称 1'), '黄金 ETF')
     expect(screen.getByLabelText('自定义标的名称 1')).toHaveValue('黄金 ETF')
+    expect(screen.getByLabelText('黄金 ETF执行方式')).toHaveValue('unknown')
 
     await userEvent.click(screen.getByRole('button', { name: '智能均分到 100%' }))
     expect(screen.getByLabelText('黄金 ETF分配比例')).toHaveValue('25')
@@ -139,6 +141,25 @@ describe('investment target settings', () => {
 
     await userEvent.click(screen.getAllByRole('button', { name: '移除' })[0])
     expect(screen.queryByDisplayValue('黄金 ETF')).not.toBeInTheDocument()
+  })
+
+  it('shows execution mode only for custom targets and resets it when switching target kinds', async () => {
+    const plan = {
+      id: 'p1', name: '自定义计划', status: 'draft', defaultContributionBps: 8000,
+      reserveCents: 0, roundingUnitCents: 10000, version: 1, deletable: true,
+      destinations: [{ id: 'd1', name: '苹果', active: true, archived: false, sortOrder: 0, allocationBps: 10000, version: 1, executionMode: 'direct_us', settlementCurrency: 'USD', benchmarkId: '', fxQuotaRelevant: true }],
+    }
+    vi.spyOn(globalThis, 'fetch')
+      .mockImplementationOnce(() => json({ id: 'u1', username: 'user' }))
+      .mockImplementationOnce(() => json(plan))
+    renderApp('/plans/p1/settings')
+    expect(await screen.findByLabelText('苹果执行方式')).toHaveValue('direct_us')
+
+    await userEvent.selectOptions(screen.getByLabelText('投资标的 1'), '现金')
+    expect(screen.queryByText('执行方式')).not.toBeInTheDocument()
+
+    await userEvent.selectOptions(screen.getByLabelText('投资标的 1'), '__custom__')
+    expect(screen.getByLabelText('标的 1执行方式')).toHaveValue('unknown')
   })
 
   it('sorts and drags targets, then confirms a save by returning to overview', async () => {
@@ -390,3 +411,126 @@ describe('monthly income expression', () => {
     await userEvent.click(screen.getByRole('button', { name: '退出' }))
     expect(await screen.findByRole('heading', { name: '欢迎回来' })).toBeInTheDocument()
   })
+
+describe('QDII and annual FX assistants', () => {
+  it('groups only the two real overseas targets and omits HKD when the plan only needs USD', async () => {
+    const plan = {
+      id: 'p1', name: '海外计划', status: 'active', defaultContributionBps: 10000,
+      reserveCents: 0, roundingUnitCents: 10000, version: 1, deletable: false,
+      destinations: [
+        { id: 'us1', name: '苹果', active: true, archived: false, sortOrder: 0, allocationBps: 5000, version: 1, executionMode: 'direct_us', settlementCurrency: 'USD', benchmarkId: '', fxQuotaRelevant: true },
+        { id: 'us2', name: '微软', active: true, archived: false, sortOrder: 1, allocationBps: 5000, version: 1, executionMode: 'direct_us', settlementCurrency: 'USD', benchmarkId: '', fxQuotaRelevant: true },
+      ],
+    }
+    const record = {
+      id: 'm1', planId: 'p1', month: '2026-08', incomeCents: 100000, expenseTotalCents: 0,
+      reserveCents: 0, surplusCents: 100000, investableBaseCents: 100000, contributionBps: 10000,
+      recommendedTotalCents: 100000, roundingUnitCents: 10000, actualTotalCents: 0,
+      status: 'not_started', note: '', version: 1, expenses: [],
+      allocations: [
+        { id: 'a1', destinationId: 'us1', name: '苹果', sortOrder: 0, allocationBps: 5000, recommendedCents: 50000, actualCents: 0, differenceCents: -50000 },
+        { id: 'a2', destinationId: 'us2', name: '微软', sortOrder: 1, allocationBps: 5000, recommendedCents: 50000, actualCents: 0, differenceCents: -50000 },
+      ],
+    }
+    const fx = { window: 'rolling_12', currencies: ['USD'], summaries: [{ currency: 'USD', cnyCents: 100000, foreignAmount: 140 }], rates: [], quotaUsd: 50000, quotaSource: 'https://example.test', quotaEffectiveDate: '2026-07-06', complianceNotice: '不是绝对购汇上限，也不代表境外证券投资许可。', months: [{ month: '2026-09', currency: 'USD', cnyCents: 100000, foreignAmount: 140, usdEquivalent: 140, cumulativeUsdEquivalent: 140, details: [] }] }
+    vi.spyOn(globalThis, 'fetch').mockImplementation(input => {
+      const url = String(input)
+      if (url.endsWith('/auth/me')) return json({ id: 'u1', username: 'user' })
+      if (url.endsWith('/plans/p1')) return json(plan)
+      if (url.endsWith('/expense-sources')) return json({ items: [] })
+      if (url.endsWith('/plans/p1/months/2026-08')) return json(record)
+      if (url.includes('/plans/p1/assistants/fx')) return json(fx)
+      return json({ items: [] })
+    })
+    const view = renderApp('/plans/p1/month/2026-08')
+    expect(await screen.findByText('海外直投标的')).toBeInTheDocument()
+    expect(screen.getAllByText('苹果')).toHaveLength(1)
+    expect(screen.getAllByText('微软')).toHaveLength(1)
+    expect(screen.queryByText('特斯拉')).not.toBeInTheDocument()
+    expect(screen.getByText('美股 2 个标的')).toBeInTheDocument()
+    expect(screen.queryByText('港股 0 个标的')).not.toBeInTheDocument()
+    expect(screen.getByText('汇总 2 个海外标的')).toBeInTheDocument()
+    const actualInput = view.container.querySelector('.overseas-group .actual-row input') as HTMLInputElement
+    fireEvent.change(actualInput, { target: { value: '123.45' } })
+    await userEvent.click(screen.getByRole('button', { name: '查看换汇预测' }))
+    expect(await screen.findByText('USD 需求')).toBeInTheDocument()
+    expect(screen.queryByText('HKD 需求')).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '关闭年度换汇预测' }))
+    expect(actualInput.value).toBe('123.45')
+  })
+
+  it('keeps the group FX entry visible when forecast data is unavailable', async () => {
+    const plan = {
+      id: 'p1', name: '海外计划', status: 'active', defaultContributionBps: 10000,
+      reserveCents: 0, roundingUnitCents: 10000, version: 1, deletable: false,
+      destinations: [{ id: 'hk1', name: '腾讯', active: true, archived: false, sortOrder: 0, allocationBps: 10000, version: 1, executionMode: 'direct_hk', settlementCurrency: 'HKD', benchmarkId: '', fxQuotaRelevant: true }],
+    }
+    const record = {
+      id: 'm1', planId: 'p1', month: '2026-08', incomeCents: 100000, expenseTotalCents: 0,
+      reserveCents: 0, surplusCents: 100000, investableBaseCents: 100000, contributionBps: 10000,
+      recommendedTotalCents: 100000, roundingUnitCents: 10000, actualTotalCents: 0,
+      status: 'not_started', note: '', version: 1, expenses: [],
+      allocations: [{ id: 'a1', destinationId: 'hk1', name: '腾讯', sortOrder: 0, allocationBps: 10000, recommendedCents: 100000, actualCents: 0, differenceCents: -100000 }],
+    }
+    vi.spyOn(globalThis, 'fetch').mockImplementation(input => {
+      const url = String(input)
+      if (url.endsWith('/auth/me')) return json({ id: 'u1', username: 'user' })
+      if (url.endsWith('/plans/p1')) return json(plan)
+      if (url.endsWith('/expense-sources')) return json({ items: [] })
+      if (url.endsWith('/plans/p1/months/2026-08')) return json(record)
+      if (url.includes('/plans/p1/assistants/fx')) return json({ window: 'rolling_12', status: 'unavailable', reason: '年度换汇预测暂不可用', currencies: ['HKD'], summaries: [], rates: [], months: [], quotaUsd: 50000, quotaSource: '', quotaEffectiveDate: '', complianceNotice: '' })
+      return json({ items: [] })
+    })
+    renderApp('/plans/p1/month/2026-08')
+    expect(await screen.findByText('港股 1 个标的')).toBeInTheDocument()
+    expect(screen.queryByText('美股 0 个标的')).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '查看换汇预测' }))
+    expect(await screen.findByText('年度换汇预测暂不可用')).toBeInTheDocument()
+    expect(screen.getByText('--')).toBeInTheDocument()
+  })
+
+  it('shows missing QDII data as unavailable without inventing zero', async () => {
+    const plan = { id: 'p1', name: 'QDII', status: 'active', defaultContributionBps: 10000, reserveCents: 0, roundingUnitCents: 10000, version: 1, deletable: false, destinations: [{ id: 'q1', name: '纳指 QDII', active: true, archived: false, sortOrder: 0, allocationBps: 10000, version: 1, executionMode: 'qdii', settlementCurrency: 'CNY', benchmarkId: '', fxQuotaRelevant: false }] }
+    const record = { id: 'm1', planId: 'p1', month: '2026-08', incomeCents: 100000, expenseTotalCents: 0, reserveCents: 0, surplusCents: 100000, investableBaseCents: 100000, contributionBps: 10000, recommendedTotalCents: 100000, roundingUnitCents: 10000, actualTotalCents: 0, status: 'not_started', note: '', version: 1, expenses: [], allocations: [{ id: 'a1', destinationId: 'q1', name: '纳指 QDII', sortOrder: 0, allocationBps: 10000, recommendedCents: 100000, actualCents: 0, differenceCents: -100000 }] }
+    vi.spyOn(globalThis, 'fetch').mockImplementation(input => { const url = String(input); if (url.endsWith('/auth/me')) return json({ id: 'u1', username: 'user' }); if (url.endsWith('/plans/p1')) return json(plan); if (url.endsWith('/expense-sources')) return json({ items: [] }); if (url.endsWith('/plans/p1/months/2026-08')) return json(record); if (url.includes('/assistants/fx')) return json({ currencies: [] }); if (url.includes('/assistants/qdii/')) return json({ destinationId: 'q1', benchmarkId: '', status: 'unavailable', reason: '未配置精确基准映射', otc: [], etfs: [] }); return json({ items: [] }) })
+    renderApp('/plans/p1/month/2026-08')
+    await userEvent.click(await screen.findByRole('button', { name: '查看同指数 QDII 基金助手' }))
+    expect(await screen.findByText('未配置精确基准映射')).toBeInTheDocument()
+    expect(screen.getByText('--')).toBeInTheDocument()
+  })
+
+  it('shows every returned candidate with OTC multi-select and ETF single-select', async () => {
+    const plan = { id: 'p1', name: 'QDII', status: 'active', defaultContributionBps: 10000, reserveCents: 0, roundingUnitCents: 10000, version: 1, deletable: false, destinations: [{ id: 'q1', name: '纳斯达克100指数（QDII）', active: true, archived: false, sortOrder: 0, allocationBps: 10000, version: 1, executionMode: 'qdii', settlementCurrency: 'CNY', benchmarkId: 'NASDAQ100_TR', fxQuotaRelevant: false }] }
+    const record = { id: 'm1', planId: 'p1', month: '2026-08', incomeCents: 3600000, expenseTotalCents: 0, reserveCents: 0, surplusCents: 3600000, investableBaseCents: 3600000, contributionBps: 10000, recommendedTotalCents: 3600000, roundingUnitCents: 10000, actualTotalCents: 0, status: 'not_started', note: '', version: 1, expenses: [], allocations: [{ id: 'a1', destinationId: 'q1', name: '纳斯达克100指数（QDII）', sortOrder: 0, allocationBps: 10000, recommendedCents: 3600000, actualCents: 0, differenceCents: -3600000 }] }
+    const known = <T,>(value: T, display = String(value)) => ({ value, display, freshness: 'fresh' })
+    const missing = { value: null, display: '--', reason: '未配置 Tushare 复权净值或数据不可用', freshness: 'unavailable' }
+    const otc = Array.from({ length: 9 }, (_, index) => ({ fundCode: `0000${index + 1}`, name: `纳指场外基金 ${index + 1}`, shareClass: index === 0 ? 'unknown' : index % 2 ? 'C' : 'A', venue: 'otc', channel: '天天基金', purchaseStatus: index === 8 ? 'suspended' : 'open', nextOpenDate: missing, dailyLimitCents: known(100000), minimumCents: known(1000), remainingNeedCents: 3600000, remainingPurchaseDays: known(index === 8 ? 0 : 10), executableCapacityCents: known(index === 8 ? 0 : 100000), trackingError: index === 0 ? known(0.0257, '2.57% · 相对 QQQ · 免费代理口径 · 234 个共同观测日 · 2026-08-21') : missing, price: missing, iopv: missing, premiumRate: missing }))
+    const etfs = Array.from({ length: 4 }, (_, index) => ({ fundCode: `15950${index}`, name: `纳指 ETF ${index + 1}`, shareClass: 'ETF', venue: 'etf', purchaseStatus: '', nextOpenDate: missing, dailyLimitCents: missing, minimumCents: missing, remainingNeedCents: 3600000, remainingPurchaseDays: missing, executableCapacityCents: missing, trackingError: index === 0 ? known(0.0035, '0.35% · 相对 QQQ · 场内价格口径 · 234 个共同观测日 · 2026-08-21') : missing, price: known(1.2 + index / 10), iopv: known(1.19 + index / 10), premiumRate: known(index / 1000, `${(index / 10).toFixed(1)}%`) }))
+    vi.spyOn(globalThis, 'fetch').mockImplementation(input => { const url = String(input); if (url.endsWith('/auth/me')) return json({ id: 'u1', username: 'user' }); if (url.endsWith('/plans/p1')) return json(plan); if (url.endsWith('/expense-sources')) return json({ items: [] }); if (url.endsWith('/plans/p1/months/2026-08')) return json(record); if (url.includes('/assistants/qdii/')) return json({ destinationId: 'q1', benchmarkId: 'NASDAQ100_TR', status: 'fresh', otc, etfs }); return json({ items: [] }) })
+    renderApp('/plans/p1/month/2026-08')
+    await userEvent.click(await screen.findByRole('button', { name: '查看同指数 QDII 基金助手' }))
+    expect(await screen.findByText('场外基金（多选）')).toBeInTheDocument()
+    expect(screen.getByText('已选 2 只')).toBeInTheDocument()
+    expect(screen.getByText('查看全部（9）')).toBeInTheDocument()
+    expect(screen.getByText('2.57%')).toBeInTheDocument()
+    expect(screen.getByText('0.35%')).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: '近一年年化跟踪误差' })).toBeInTheDocument()
+    expect(screen.getByText('00001')).toBeInTheDocument()
+    expect(screen.queryByText(/unknown 类/i)).not.toBeInTheDocument()
+    expect(screen.getByText('* 年化跟踪误差按最近一年共同观测日计算；本表相对 QQQ，共 234 个共同观测日，数据截至 2026-08-21。')).toBeInTheDocument()
+    expect(screen.getByText('* 当前单日限额为公开销售渠道观察值，仅供参考，以实际销售平台为准。')).toBeInTheDocument()
+    expect(screen.getByText('* 场内结果暂按交易价格相对 QQQ/SPY 计算，包含溢价波动；不等同于基金净值口径。')).toBeInTheDocument()
+    expect(screen.queryByText(/天天基金/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/免费代理口径/)).not.toBeInTheDocument()
+    expect(screen.queryByText('纳指场外基金 9')).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '查看全部（9）' }))
+    expect(screen.getByText('纳指场外基金 9')).toBeInTheDocument()
+    expect(screen.getByLabelText('选择 纳指场外基金 9')).toBeDisabled()
+    await userEvent.click(screen.getByLabelText('全选'))
+    expect(screen.getByText('已选 8 只')).toBeInTheDocument()
+    expect(screen.getAllByRole('radio')).toHaveLength(4)
+    await userEvent.click(screen.getByLabelText('选择 纳指 ETF 4'))
+    expect(screen.getByLabelText('选择 纳指 ETF 4')).toBeChecked()
+    expect(screen.queryByText('年化跟踪误差暂显示 --')).not.toBeInTheDocument()
+  })
+})

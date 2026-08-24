@@ -71,6 +71,8 @@ func New(cfg config.Config, app *service.App) *gin.Engine {
 	protected.DELETE("/plans/:planID/months/:month", api.deleteMonth)
 	protected.PUT("/plans/:planID/months/:month/actuals", api.updateActuals)
 	protected.GET("/plans/:planID/stats", api.planStats)
+	protected.GET("/plans/:planID/assistants/qdii/:destinationID", api.qdiiAssistant)
+	protected.GET("/plans/:planID/assistants/fx", api.fxAssistant)
 	return router
 }
 
@@ -103,14 +105,8 @@ func originAllowed(c *gin.Context, origin, configuredOrigin string) bool {
 }
 
 func requestOrigin(c *gin.Context) string {
-	scheme := "http"
-	if c.Request.TLS != nil {
-		scheme = "https"
-	}
-	if forwarded := strings.TrimSpace(strings.Split(c.GetHeader("X-Forwarded-Proto"), ",")[0]); forwarded != "" {
-		scheme = forwarded
-	}
-	if scheme != "http" && scheme != "https" {
+	scheme := requestScheme(c)
+	if scheme == "" {
 		return ""
 	}
 	host := strings.TrimSpace(c.Request.Host)
@@ -118,6 +114,20 @@ func requestOrigin(c *gin.Context) string {
 		return ""
 	}
 	return (&url.URL{Scheme: scheme, Host: host}).String()
+}
+
+func requestScheme(c *gin.Context) string {
+	scheme := "http"
+	if c.Request.TLS != nil {
+		scheme = "https"
+	}
+	if forwarded := strings.ToLower(strings.TrimSpace(strings.Split(c.GetHeader("X-Forwarded-Proto"), ",")[0])); forwarded != "" {
+		scheme = forwarded
+	}
+	if scheme != "http" && scheme != "https" {
+		return ""
+	}
+	return scheme
 }
 
 func (a *API) authenticate() gin.HandlerFunc {

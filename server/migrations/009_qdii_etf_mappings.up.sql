@@ -1,0 +1,19 @@
+INSERT INTO fund_shares
+  (id, fund_code, share_class, name, venue, active, effective_from, created_by, updated_by, created_at, updated_at)
+VALUES
+  (UUID(), '513100', 'ETF', '纳指ETF国泰', 'etf', true, '2000-01-01', '00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000000', UTC_TIMESTAMP(3), UTC_TIMESTAMP(3)),
+  (UUID(), '159941', 'ETF', '纳指ETF广发', 'etf', true, '2000-01-01', '00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000000', UTC_TIMESTAMP(3), UTC_TIMESTAMP(3)),
+  (UUID(), '513300', 'ETF', '纳斯达克ETF华夏', 'etf', true, '2000-01-01', '00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000000', UTC_TIMESTAMP(3), UTC_TIMESTAMP(3)),
+  (UUID(), '513500', 'ETF', '标普500ETF博时', 'etf', true, '2000-01-01', '00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000000', UTC_TIMESTAMP(3), UTC_TIMESTAMP(3)),
+  (UUID(), '159612', 'ETF', '标普500ETF国泰', 'etf', true, '2000-01-01', '00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000000', UTC_TIMESTAMP(3), UTC_TIMESTAMP(3)),
+  (UUID(), '159655', 'ETF', '标普500ETF华夏', 'etf', true, '2000-01-01', '00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000000', UTC_TIMESTAMP(3), UTC_TIMESTAMP(3))
+ON DUPLICATE KEY UPDATE name = VALUES(name), venue = VALUES(venue), active = true, updated_at = UTC_TIMESTAMP(3);
+
+INSERT INTO benchmark_mappings
+  (id, fund_share_id, benchmark_id, fund_return_basis, benchmark_return_basis, effective_from, created_by, updated_by, created_at, updated_at)
+SELECT UUID(), id,
+  CASE WHEN fund_code IN ('513100', '159941', '513300') THEN 'NASDAQ100_TR' ELSE 'SP500_TR' END,
+  'adjusted_nav', 'total_return', '2000-01-01',
+  '00000000-0000-0000-0000-000000000000', '00000000-0000-0000-0000-000000000000', UTC_TIMESTAMP(3), UTC_TIMESTAMP(3)
+FROM fund_shares
+WHERE share_class = 'ETF' AND fund_code IN ('513100', '159941', '513300', '513500', '159612', '159655');

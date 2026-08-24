@@ -19,6 +19,8 @@ func planResponse(plan database.Plan) gin.H {
 			"id": destination.ID, "name": destination.Name, "active": destination.Active,
 			"allocationBps": destination.AllocationBPS, "sortOrder": destination.SortOrder,
 			"archived": destination.ArchivedAt != nil, "version": destination.Version,
+			"executionMode": destination.ExecutionMode, "settlementCurrency": destination.SettlementCurrency,
+			"benchmarkId": destination.BenchmarkID, "fxQuotaRelevant": destination.FXQuotaRelevant,
 		})
 	}
 	return gin.H{
