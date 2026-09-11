@@ -323,6 +323,32 @@ select { cursor: pointer; }
 .actual-row label > small { grid-column: 2; color: var(--danger); font-size: .68rem; }
 .actual-row label > small.positive { color: var(--primary); }
 .assistant-link { width: max-content; border: 0; background: transparent; color: var(--primary); padding: 3px 0; font-weight: 700; cursor: pointer; }
+.qdii-plan-summary { display: grid; gap: 10px; width: 100%; margin-top: 5px; padding: 11px; border: 1px solid #d5e2f2; border-radius: 13px; background: linear-gradient(145deg, #fbfdff, #f4f8fe); box-shadow: 0 5px 15px rgb(35 82 135 / .06); }
+.qdii-summary-head { display: flex; align-items: center; gap: 8px; }
+.qdii-summary-head > span { display: grid; place-items: center; flex: 0 0 25px; height: 25px; border-radius: 8px; color: white !important; background: #2f78d3; font-size: .72rem !important; font-weight: 900; }
+.qdii-summary-head > div { display: grid; gap: 1px; }
+.qdii-summary-head strong { color: #153f72; font-size: .74rem; }
+.qdii-summary-head small { color: #7b8ca1; font-size: .6rem; }
+.qdii-summary-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(260px, .8fr); gap: 8px; }
+.qdii-summary-block { min-width: 0; padding: 9px 10px; border: 1px solid #e1e9f3; border-radius: 10px; background: rgb(255 255 255 / .82); }
+.qdii-summary-label { display: block; margin-bottom: 6px; color: #71839a !important; font-size: .61rem !important; font-weight: 800; letter-spacing: .04em; }
+.qdii-fund-chips { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 7px; }
+.qdii-fund-chip { display: grid; gap: 8px; min-width: 0; padding: 8px 9px; border: 1px solid #dbe7f6; border-radius: 9px; color: #315578 !important; background: #f7faff; }
+.qdii-fund-title { display: grid; min-width: 0; gap: 1px; }
+.qdii-fund-title strong { overflow: hidden; font-size: .66rem; text-overflow: ellipsis; white-space: nowrap; }
+.qdii-fund-title small { color: #788ca4; font-size: .59rem; font-weight: 700; }
+.qdii-fund-amounts { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding-top: 7px; border-top: 1px solid #e3ebf5; }
+.qdii-fund-amounts > span { display: grid; gap: 1px; color: #71839a !important; font-size: .57rem !important; }
+.qdii-fund-amounts > span + span { padding-left: 8px; border-left: 1px solid #e3ebf5; }
+.qdii-fund-amounts small { color: #71839a; font-size: .57rem; }
+.qdii-fund-amounts b { color: #1768c5; font-size: .69rem; white-space: nowrap; }
+.qdii-summary-etf { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; background: #eef5ff; border-color: #d3e3f8; }
+.qdii-summary-etf > div:first-child { display: grid; min-width: 0; gap: 2px; }
+.qdii-summary-etf > div:first-child > strong { overflow: hidden; color: #244e7e; font-size: .69rem; text-overflow: ellipsis; white-space: nowrap; }
+.qdii-summary-etf > div:first-child > small { color: #71859d; font-size: .59rem; }
+.qdii-summary-amount { display: grid; gap: 2px; padding-left: 12px; border-left: 1px solid #ccdcf0; text-align: right; }
+.qdii-summary-amount span { color: #71839a !important; font-size: .58rem !important; }
+.qdii-summary-amount strong { color: #1768c5; font-size: .78rem; white-space: nowrap; }
 .overseas-group { margin: 12px 0; padding: 14px 16px 10px; border: 1px solid #cbdced; border-radius: 18px; background: linear-gradient(145deg, #f7fbff, #fff); }
 .overseas-group-title { display: flex; justify-content: space-between; gap: 16px; align-items: end; padding: 4px 0 8px; border-bottom: 1px solid #dfe9f3; }
 .overseas-group-title > div { display: grid; gap: 2px; }
@@ -348,7 +374,7 @@ select { cursor: pointer; }
 .fund-card-title > div { display: grid; gap: 3px; }
 .fund-card-title span { color: var(--muted); font-size: .76rem; }
 .purchase { height: max-content; padding: 5px 8px; border-radius: 8px; font-size: .7rem; color: #526272; background: #edf1f4; }
-.purchase.open { color: #15754d; background: #e2f6ed; }.purchase.suspended { color: #a4453d; background: #fdeae8; }
+.purchase.open, .purchase.limited { color: #15754d; background: #e2f6ed; }.purchase.suspended { color: #a4453d; background: #fdeae8; }
 .fund-card dl { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; margin: 15px 0 0; }
 .fund-card dl > div { display: grid; gap: 2px; }.fund-card dt { color: var(--muted); font-size: .68rem; }.fund-card dd { margin: 0; font-weight: 700; }
 .data-value small { margin-left: 5px; padding: 2px 4px; border-radius: 4px; color: #9a6523; background: #fff1d4; font-size: .62rem; }
@@ -370,6 +396,7 @@ select { cursor: pointer; }
 .qdii-table tbody tr.selected { background: #f3f8ff; }.qdii-table tbody tr:hover { background: #f8fbff; }
 .qdii-table tbody tr.disabled { color: #8592a0; background: #fafbfc; }.qdii-table tbody tr.disabled:hover { background: #fafbfc; }
 .qdii-table td:nth-child(2) { position: relative; min-width: 230px; white-space: normal; }.qdii-table td:nth-child(2) > strong, .qdii-table td:nth-child(2) > span { display: block; }.qdii-table td:nth-child(2) > span { margin-top: 3px; color: var(--muted); font-size: .64rem; }
+.etf-table th:nth-child(6), .etf-table td:nth-child(6) { text-align: center; }
 .qdii-table .purchase, .qdii-table .recommendation { display: inline-block; margin-top: 5px; }
 .qdii-table .recommendation { padding: 3px 5px; border-radius: 4px; color: #177447; background: #ddf6e9; font-size: .61rem; }
 .qdii-table input { width: 15px; height: 15px; accent-color: var(--primary); cursor: pointer; }
@@ -379,12 +406,13 @@ select { cursor: pointer; }
 .qdii-total { display: flex; justify-content: space-between; margin: 0 12px; padding: 10px 12px; border: 1px solid #dce5ef; border-radius: 8px; background: #fbfdff; }.qdii-total span { color: var(--muted); }.qdii-total strong { font-size: .9rem; }
 .qdii-gap { display: flex; align-items: center; justify-content: space-between; padding: 11px 14px; }.qdii-gap span { font-weight: 800; }.qdii-gap strong { color: var(--danger); font-size: 1rem; }
 .qdii-equation { display: flex; align-items: center; justify-content: center; gap: 18px; margin: 11px 12px 13px; padding: 10px 12px; border: 1px solid #dce5ef; border-radius: 8px; background: #f8fbff; font-size: .72rem; }.qdii-equation > b { color: var(--muted); }.qdii-equation span strong { margin-left: 4px; }
+.qdii-confirmed { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 13px; border: 1px solid #bde3cc; border-radius: 10px; color: #17623b; background: #eefaf3; }.qdii-confirmed span { font-size: .72rem; }
+.qdii-confirm-action { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 13px 14px; border: 1px solid #cbd9e8; border-radius: 12px; background: #f8fbff; }.qdii-confirm-action > div { display: grid; gap: 3px; }.qdii-confirm-action span { color: var(--muted); font-size: .7rem; }.qdii-confirm-action small { color: var(--danger); }.qdii-confirm-action button { flex: 0 0 auto; }
 .window-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; padding: 5px; border-radius: 12px; background: #e8edf2; }.window-switch button { padding: 9px; border: 0; border-radius: 9px; background: transparent; cursor: pointer; }.window-switch button.active { background: white; color: var(--primary); font-weight: 800; box-shadow: 0 2px 8px rgb(20 40 60 / .1); }
 .fx-summaries { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }.fx-summaries article { display: grid; gap: 5px; padding: 16px; border-radius: 14px; color: white; background: linear-gradient(135deg, #2567b5, #4089ce); }.fx-summaries article strong { font-size: 1.5rem; }.fx-summaries article small { color: #dceeff; }
 .fx-chart { padding: 10px; border: 1px solid #e0e7ed; border-radius: 14px; background: white; }.fx-chart svg { width: 100%; display: block; }.fx-chart line { stroke: #d6dee6; }.fx-chart path { fill: none; stroke: #2e78c7; stroke-width: 3; }.fx-chart circle { fill: #2e78c7; }
 .scenario-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: end; }.scenario-grid .button { height: 42px; grid-column: 1/-1; }
 .fx-months { display: grid; max-height: 320px; overflow: auto; border: 1px solid #e0e7ed; border-radius: 12px; background: white; }.fx-months > div { display: grid; grid-template-columns: 1fr auto; gap: 3px 16px; padding: 10px 12px; border-bottom: 1px solid #edf1f4; }.fx-months small { color: var(--muted); }
-.quota-notice { padding: 15px; border: 1px solid #e3d6aa; border-radius: 13px; background: #fffaf0; display: grid; gap: 6px; }.quota-notice span, .quota-notice p { color: #776845; font-size: .78rem; }.quota-notice p { margin: 4px 0; }
 .result-actions { padding-top: 5px; display: flex; align-items: center; justify-content: flex-end; gap: 25px; }
 .result-actions > div { display: grid; gap: 3px; text-align: right; }
 .result-actions span { color: var(--muted); font-size: .7rem; }
@@ -486,6 +514,7 @@ select { cursor: pointer; }
   .account > span:not(.avatar) { display: none; }
   .appearance-label { display: none; }
   .stats-bottom-grid { grid-template-columns: 1fr; }
+  .qdii-summary-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 580px) {

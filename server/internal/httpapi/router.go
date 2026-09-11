@@ -70,8 +70,10 @@ func New(cfg config.Config, app *service.App) *gin.Engine {
 	protected.PUT("/plans/:planID/months/:month", api.upsertMonth)
 	protected.DELETE("/plans/:planID/months/:month", api.deleteMonth)
 	protected.PUT("/plans/:planID/months/:month/actuals", api.updateActuals)
+	protected.GET("/plans/:planID/months/:month/qdii-confirmations", api.qdiiConfirmationSummaries)
 	protected.GET("/plans/:planID/stats", api.planStats)
 	protected.GET("/plans/:planID/assistants/qdii/:destinationID", api.qdiiAssistant)
+	protected.PUT("/plans/:planID/assistants/qdii/:destinationID", api.confirmQDIIAssistant)
 	protected.GET("/plans/:planID/assistants/fx", api.fxAssistant)
 	return router
 }

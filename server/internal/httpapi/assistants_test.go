@@ -42,6 +42,13 @@ func TestAssistantHandlersStrictlyValidateInputs(t *testing.T) {
 	if recorder.Code != 400 {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
+	confirmRecorder := httptest.NewRecorder()
+	confirm, _ := gin.CreateTestContext(confirmRecorder)
+	confirm.Request = httptest.NewRequest("PUT", "/", nil)
+	api.confirmQDIIAssistant(confirm)
+	if confirmRecorder.Code != 400 {
+		t.Fatalf("confirm status=%d body=%s", confirmRecorder.Code, confirmRecorder.Body.String())
+	}
 }
 
 func containsSensitive(body string) bool {

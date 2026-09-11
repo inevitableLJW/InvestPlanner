@@ -432,7 +432,7 @@ describe('QDII and annual FX assistants', () => {
         { id: 'a2', destinationId: 'us2', name: '微软', sortOrder: 1, allocationBps: 5000, recommendedCents: 50000, actualCents: 0, differenceCents: -50000 },
       ],
     }
-    const fx = { window: 'rolling_12', currencies: ['USD'], summaries: [{ currency: 'USD', cnyCents: 100000, foreignAmount: 140 }], rates: [], quotaUsd: 50000, quotaSource: 'https://example.test', quotaEffectiveDate: '2026-07-06', complianceNotice: '不是绝对购汇上限，也不代表境外证券投资许可。', months: [{ month: '2026-09', currency: 'USD', cnyCents: 100000, foreignAmount: 140, usdEquivalent: 140, cumulativeUsdEquivalent: 140, details: [] }] }
+    const fx = { window: 'rolling_12', currencies: ['USD'], summaries: [{ currency: 'USD', cnyCents: 100000, foreignAmount: 140 }], rates: [], months: [{ month: '2026-09', currency: 'USD', cnyCents: 100000, foreignAmount: 140, usdEquivalent: 140, cumulativeUsdEquivalent: 140, details: [] }] }
     vi.spyOn(globalThis, 'fetch').mockImplementation(input => {
       const url = String(input)
       if (url.endsWith('/auth/me')) return json({ id: 'u1', username: 'user' })
@@ -478,7 +478,7 @@ describe('QDII and annual FX assistants', () => {
       if (url.endsWith('/plans/p1')) return json(plan)
       if (url.endsWith('/expense-sources')) return json({ items: [] })
       if (url.endsWith('/plans/p1/months/2026-08')) return json(record)
-      if (url.includes('/plans/p1/assistants/fx')) return json({ window: 'rolling_12', status: 'unavailable', reason: '年度换汇预测暂不可用', currencies: ['HKD'], summaries: [], rates: [], months: [], quotaUsd: 50000, quotaSource: '', quotaEffectiveDate: '', complianceNotice: '' })
+      if (url.includes('/plans/p1/assistants/fx')) return json({ window: 'rolling_12', status: 'unavailable', reason: '年度换汇预测暂不可用', currencies: ['HKD'], summaries: [], rates: [], months: [] })
       return json({ items: [] })
     })
     renderApp('/plans/p1/month/2026-08')
@@ -499,14 +499,32 @@ describe('QDII and annual FX assistants', () => {
     expect(screen.getByText('--')).toBeInTheDocument()
   })
 
+  it('shows the persisted QDII confirmation summary under its monthly target', async () => {
+    const plan = { id: 'p1', name: 'QDII', status: 'active', defaultContributionBps: 10000, reserveCents: 0, roundingUnitCents: 10000, version: 1, deletable: false, destinations: [{ id: 'q1', name: '纳斯达克100指数（QDII）', active: true, archived: false, sortOrder: 0, allocationBps: 10000, version: 1, executionMode: 'qdii', settlementCurrency: 'CNY', benchmarkId: 'NASDAQ100_TR', fxQuotaRelevant: false }] }
+    const record = { id: 'm1', planId: 'p1', month: '2026-08', incomeCents: 100000, expenseTotalCents: 0, reserveCents: 0, surplusCents: 100000, investableBaseCents: 100000, contributionBps: 10000, recommendedTotalCents: 100000, roundingUnitCents: 10000, actualTotalCents: 0, status: 'not_started', note: '', version: 1, expenses: [], allocations: [{ id: 'a1', destinationId: 'q1', name: '纳斯达克100指数（QDII）', sortOrder: 0, allocationBps: 10000, recommendedCents: 100000, actualCents: 0, differenceCents: -100000 }] }
+    vi.spyOn(globalThis, 'fetch').mockImplementation(input => { const url = String(input); if (url.endsWith('/auth/me')) return json({ id: 'u1', username: 'user' }); if (url.endsWith('/plans/p1')) return json(plan); if (url.endsWith('/expense-sources')) return json({ items: [] }); if (url.endsWith('/plans/p1/months/2026-08')) return json(record); if (url.endsWith('/plans/p1/months/2026-08/qdii-confirmations')) return json({ items: [{ destinationId: 'q1', selectedOtcFunds: [{ fundCode: '270042', name: '广发纳斯达克100ETF联接人民币(QDII)A', shareClass: 'A', dailyAmountCents: 500, totalAmountCents: 10000 }, { fundCode: '006479', name: '广发纳斯达克100ETF联接人民币(QDII)C', shareClass: 'C', dailyAmountCents: 500, totalAmountCents: 12500 }], selectedEtfFund: { fundCode: '513100', name: '纳指ETF国泰', shareClass: 'ETF' }, selectedEtfAmountCents: 77500, confirmedAt: '2026-08-27T01:00:00Z' }] }); if (url.includes('/assistants/fx')) return json({ currencies: [] }); return json({ items: [] }) })
+    renderApp('/plans/p1/month/2026-08')
+    const summary = await screen.findByText('本月已确认方案')
+    const card = summary.closest('section')
+    expect(card).toHaveTextContent('场外基金 · 2 只')
+    expect(card).toHaveTextContent('广发纳斯达克100ETF联接人民币(QDII)A270042')
+    expect(card).toHaveTextContent('广发纳斯达克100ETF联接人民币(QDII)C006479')
+    expect(card).toHaveTextContent('每日投入¥5.00本月合计¥100.00')
+    expect(card).toHaveTextContent('每日投入¥5.00本月合计¥125.00')
+    expect(card).toHaveTextContent('场内 ETF纳指ETF国泰513100')
+    expect(card).toHaveTextContent('场内合计¥775.00')
+    expect(card).toHaveTextContent('确认于')
+  })
+
   it('shows every returned candidate with OTC multi-select and ETF single-select', async () => {
     const plan = { id: 'p1', name: 'QDII', status: 'active', defaultContributionBps: 10000, reserveCents: 0, roundingUnitCents: 10000, version: 1, deletable: false, destinations: [{ id: 'q1', name: '纳斯达克100指数（QDII）', active: true, archived: false, sortOrder: 0, allocationBps: 10000, version: 1, executionMode: 'qdii', settlementCurrency: 'CNY', benchmarkId: 'NASDAQ100_TR', fxQuotaRelevant: false }] }
     const record = { id: 'm1', planId: 'p1', month: '2026-08', incomeCents: 3600000, expenseTotalCents: 0, reserveCents: 0, surplusCents: 3600000, investableBaseCents: 3600000, contributionBps: 10000, recommendedTotalCents: 3600000, roundingUnitCents: 10000, actualTotalCents: 0, status: 'not_started', note: '', version: 1, expenses: [], allocations: [{ id: 'a1', destinationId: 'q1', name: '纳斯达克100指数（QDII）', sortOrder: 0, allocationBps: 10000, recommendedCents: 3600000, actualCents: 0, differenceCents: -3600000 }] }
     const known = <T,>(value: T, display = String(value)) => ({ value, display, freshness: 'fresh' })
     const missing = { value: null, display: '--', reason: '未配置 Tushare 复权净值或数据不可用', freshness: 'unavailable' }
     const otc = Array.from({ length: 9 }, (_, index) => ({ fundCode: `0000${index + 1}`, name: `纳指场外基金 ${index + 1}`, shareClass: index === 0 ? 'unknown' : index % 2 ? 'C' : 'A', venue: 'otc', channel: '天天基金', purchaseStatus: index === 8 ? 'suspended' : 'open', nextOpenDate: missing, dailyLimitCents: known(100000), minimumCents: known(1000), remainingNeedCents: 3600000, remainingPurchaseDays: known(index === 8 ? 0 : 10), executableCapacityCents: known(index === 8 ? 0 : 100000), trackingError: index === 0 ? known(0.0257, '2.57% · 相对 QQQ · 免费代理口径 · 234 个共同观测日 · 2026-08-21') : missing, price: missing, iopv: missing, premiumRate: missing }))
-    const etfs = Array.from({ length: 4 }, (_, index) => ({ fundCode: `15950${index}`, name: `纳指 ETF ${index + 1}`, shareClass: 'ETF', venue: 'etf', purchaseStatus: '', nextOpenDate: missing, dailyLimitCents: missing, minimumCents: missing, remainingNeedCents: 3600000, remainingPurchaseDays: missing, executableCapacityCents: missing, trackingError: index === 0 ? known(0.0035, '0.35% · 相对 QQQ · 场内价格口径 · 234 个共同观测日 · 2026-08-21') : missing, price: known(1.2 + index / 10), iopv: known(1.19 + index / 10), premiumRate: known(index / 1000, `${(index / 10).toFixed(1)}%`) }))
-    vi.spyOn(globalThis, 'fetch').mockImplementation(input => { const url = String(input); if (url.endsWith('/auth/me')) return json({ id: 'u1', username: 'user' }); if (url.endsWith('/plans/p1')) return json(plan); if (url.endsWith('/expense-sources')) return json({ items: [] }); if (url.endsWith('/plans/p1/months/2026-08')) return json(record); if (url.includes('/assistants/qdii/')) return json({ destinationId: 'q1', benchmarkId: 'NASDAQ100_TR', status: 'fresh', otc, etfs }); return json({ items: [] }) })
+    const etfs = Array.from({ length: 4 }, (_, index) => ({ fundCode: `15950${index}`, name: `纳指 ETF ${index + 1}`, shareClass: 'ETF', venue: 'etf', purchaseStatus: '', nextOpenDate: missing, dailyLimitCents: missing, minimumCents: missing, remainingNeedCents: 3600000, remainingPurchaseDays: missing, executableCapacityCents: missing, trackingError: index === 0 ? known(0.0035, '0.35% · 相对 QQQ · 累计净值代理口径 · 234 个共同观测日 · 2026-08-21') : missing, price: known(1.2 + index / 10), iopv: known(1.19 + index / 10), premiumRate: known(index / 1000, `${(index / 10).toFixed(1)}%`) }))
+    let confirmation: { selectedOtcFundCodes: string[]; selectedOtcPlans: Array<{ fundCode: string; dailyAmountCents: number | null; totalAmountCents: number | null }>; selectedEtfFundCode: string; selectedEtfAmountCents: number | null; confirmedAt: string } | undefined
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => { const url = String(input); if (url.endsWith('/auth/me')) return json({ id: 'u1', username: 'user' }); if (url.endsWith('/plans/p1')) return json(plan); if (url.endsWith('/expense-sources')) return json({ items: [] }); if (url.endsWith('/plans/p1/months/2026-08')) return json(record); if (url.includes('/assistants/qdii/')) { if (init?.method === 'PUT') { const body = JSON.parse(String(init.body)); confirmation = { selectedOtcFundCodes: body.selectedOtcFundCodes, selectedOtcPlans: body.selectedOtcFundCodes.map((fundCode: string) => ({ fundCode, dailyAmountCents: 100000, totalAmountCents: 100000 })), selectedEtfFundCode: body.selectedEtfFundCode, selectedEtfAmountCents: 2800000, confirmedAt: '2026-08-26T08:00:00Z' }; return json(confirmation) } return json({ destinationId: 'q1', benchmarkId: 'NASDAQ100_TR', status: 'fresh', otc, etfs, confirmation }) } return json({ items: [] }) })
     renderApp('/plans/p1/month/2026-08')
     await userEvent.click(await screen.findByRole('button', { name: '查看同指数 QDII 基金助手' }))
     expect(await screen.findByText('场外基金（多选）')).toBeInTheDocument()
@@ -517,9 +535,11 @@ describe('QDII and annual FX assistants', () => {
     expect(screen.getByRole('columnheader', { name: '近一年年化跟踪误差' })).toBeInTheDocument()
     expect(screen.getByText('00001')).toBeInTheDocument()
     expect(screen.queryByText(/unknown 类/i)).not.toBeInTheDocument()
-    expect(screen.getByText('* 年化跟踪误差按最近一年共同观测日计算；本表相对 QQQ，共 234 个共同观测日，数据截至 2026-08-21。')).toBeInTheDocument()
-    expect(screen.getByText('* 当前单日限额为公开销售渠道观察值，仅供参考，以实际销售平台为准。')).toBeInTheDocument()
-    expect(screen.getByText('* 场内结果暂按交易价格相对 QQQ/SPY 计算，包含溢价波动；不等同于基金净值口径。')).toBeInTheDocument()
+    expect(screen.getByText('* 年化跟踪误差按最近一年同区间收益计算；各基金的比较口径、样本数和截止日期分别见对应数值的提示。')).toBeInTheDocument()
+    expect(screen.getByText('2.57%')).toHaveAttribute('title', '相对 QQQ · 234 个共同观测日 · 2026-08-21')
+    expect(screen.getByText(/零值或矛盾值显示 --/)).toBeInTheDocument()
+    expect(screen.getByRole('columnheader', { name: '剩余工作日（估算）' })).toBeInTheDocument()
+    expect(screen.queryByText(/场内结果暂按交易价格/)).not.toBeInTheDocument()
     expect(screen.queryByText(/天天基金/)).not.toBeInTheDocument()
     expect(screen.queryByText(/免费代理口径/)).not.toBeInTheDocument()
     expect(screen.queryByText('纳指场外基金 9')).not.toBeInTheDocument()
@@ -532,5 +552,30 @@ describe('QDII and annual FX assistants', () => {
     await userEvent.click(screen.getByLabelText('选择 纳指 ETF 4'))
     expect(screen.getByLabelText('选择 纳指 ETF 4')).toBeChecked()
     expect(screen.queryByText('年化跟踪误差暂显示 --')).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '确认方案' }))
+    expect(await screen.findByText('已加载上次确认方案')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '关闭 QDII 基金助手' }))
+    const summary = await screen.findByText('本月已确认方案')
+    const card = summary.closest('section')
+    expect(card).toHaveTextContent('纳指场外基金 100001')
+    expect(card).toHaveTextContent('每日投入¥1,000.00本月合计¥1,000.00')
+    expect(card).toHaveTextContent('场内 ETF纳指 ETF 4159503')
+    expect(card).toHaveTextContent('场内合计¥28,000.00')
+    await userEvent.click(screen.getByRole('button', { name: '查看同指数 QDII 基金助手' }))
+    expect(await screen.findByText('已加载上次确认方案')).toBeInTheDocument()
+    expect(screen.getByText('已选 8 只')).toBeInTheDocument()
+    expect(screen.getByLabelText('选择 纳指 ETF 4')).toBeChecked()
+    // A previously confirmed fund may cease to be sold. It must remain removable.
+    otc[0].purchaseStatus = 'not_sold'
+    await userEvent.click(screen.getByRole('button', { name: '关闭 QDII 基金助手' }))
+    await userEvent.click(screen.getByRole('button', { name: '查看同指数 QDII 基金助手' }))
+    expect(await screen.findByText('该渠道未代销')).toBeInTheDocument()
+    const unavailableSelection = screen.getByLabelText('选择 纳指场外基金 1')
+    expect(unavailableSelection).toBeChecked()
+    expect(unavailableSelection).toBeEnabled()
+    await userEvent.click(unavailableSelection)
+    expect(unavailableSelection).not.toBeChecked()
+    expect(unavailableSelection).toBeDisabled()
+    expect(screen.getByText('已选 7 只')).toBeInTheDocument()
   })
 })

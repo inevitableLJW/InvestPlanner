@@ -9,24 +9,32 @@ import (
 	"time"
 
 	"investplanner/server/internal/database"
-	"investplanner/server/internal/repository"
 )
 
 const systemActor = "00000000-0000-0000-0000-000000000000"
 
 type Collector struct {
-	Store       *repository.Store
-	Snapshots   *SnapshotService
-	AKTools     *AKToolsClient
-	Tushare     *TushareClient
-	ChinaMoney  *ChinaMoneyClient
-	Interval    time.Duration
-	Concurrency int
-	Now         func() time.Time
+	Store           CollectorStore
+	Snapshots       *SnapshotService
+	AKTools         *AKToolsClient
+	PurchaseDetails PurchaseDetailProvider
+	Tushare         *TushareClient
+	ChinaMoney      *ChinaMoneyClient
+	Interval        time.Duration
+	Concurrency     int
+	Now             func() time.Time
+}
+
+type CollectorStore interface {
+	ListActiveFundShares(time.Time) ([]database.FundShare, error)
+	ListActiveBenchmarkMappings(time.Time) ([]database.BenchmarkMapping, error)
+	UpsertVerifiedFundShareMapping(database.FundShare, string, time.Time) error
+	UpsertDiscoveredFundShare(database.FundShare) error
 }
 type normalizedPurchase struct {
 	Channel         string     `json:"channel"`
 	Status          string     `json:"status"`
+	RawStatus       string     `json:"rawStatus"`
 	NextOpenDate    *time.Time `json:"nextOpenDate"`
 	MinimumCents    *int64     `json:"minimumCents"`
 	DailyLimitCents *int64     `json:"dailyLimitCents"`
@@ -42,13 +50,23 @@ type normalizedFX struct {
 }
 
 func (c *Collector) Refresh(ctx context.Context) []error {
-	jobs := []func(context.Context) error{c.refreshFreeTracking, c.refreshPurchases, c.refreshETF}
-	if c.ChinaMoney != nil {
-		jobs = append(jobs, c.refreshFX)
-	}
+	// Populate the two user-facing assistants before the much slower historical
+	// series jobs can occupy every collector slot. This keeps first startup from
+	// showing an empty QDII/FX panel for several minutes.
+	errs := c.runJobs(ctx, []func(context.Context) error{c.refreshPurchases, c.refreshFX})
+	// The free tracking job and the broad ETF quote job both fan out to
+	// EastMoney. Running them together makes the NAV endpoint substantially
+	// less reliable, so finish the smaller tracking set before starting the
+	// broad quote refresh.
+	errs = append(errs, c.runJobs(ctx, []func(context.Context) error{c.refreshFreeTracking})...)
+	jobs := []func(context.Context) error{c.refreshETF}
 	if c.Tushare != nil {
 		jobs = append(jobs, c.refreshTushareNAV, c.refreshTushareBenchmarks, c.refreshTushareCalendar, c.refreshTushareFX)
 	}
+	return append(errs, c.runJobs(ctx, jobs)...)
+}
+
+func (c *Collector) runJobs(ctx context.Context, jobs []func(context.Context) error) []error {
 	limit := c.Concurrency
 	if limit < 1 {
 		limit = 2
@@ -104,6 +122,9 @@ func (c *Collector) refreshFreeTracking(ctx context.Context) error {
 			return fmt.Errorf("free tracking benchmark snapshot: %w", err)
 		}
 	}
+	if len(benchmarks) == 0 {
+		return fmt.Errorf("free tracking: no valid benchmark series")
+	}
 	shares, err := c.Store.ListActiveFundShares(now)
 	if err != nil {
 		return fmt.Errorf("free tracking fund list: %w", err)
@@ -116,65 +137,72 @@ func (c *Collector) refreshFreeTracking(ctx context.Context) error {
 	for _, mapping := range mappings {
 		benchmarkByShare[mapping.FundShareID] = mapping.BenchmarkID
 	}
-	etfNAVAvailable := true
-	etfAdjustedAvailable := true
-	for _, share := range shares {
-		benchmarkID := benchmarkByShare[share.ID]
-		base, ok := benchmarks[benchmarkID]
-		if !ok {
-			continue
+	completed := map[string]bool{}
+	for pass := 0; pass < 2; pass++ {
+		if pass > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Second):
+			}
 		}
-		var series NAVSeries
-		var fetchErr error
-		var snapshotKind string
-		switch share.Venue {
-		case "otc":
-			series, fetchErr = c.AKTools.FundCumulativeNAV(ctx, share.FundCode)
-			snapshotKind = "fund_cumulative_nav_proxy"
-		case "etf":
-			if etfNAVAvailable {
-				series, fetchErr = c.AKTools.FundETFCumulativeNAV(ctx, share.FundCode)
-				if fetchErr != nil {
-					etfNAVAvailable = false
+		for _, share := range shares {
+			benchmarkID := benchmarkByShare[share.ID]
+			base, ok := benchmarks[benchmarkID]
+			if !ok {
+				continue
+			}
+			resultKey := share.FundCode + "|" + benchmarkID
+			if completed[resultKey] {
+				continue
+			}
+			series, snapshotKind, fetchErr := c.freeTrackingSeries(ctx, share)
+			if fetchErr != nil {
+				if pass == 1 {
+					log.Printf("free tracking fund %s (%s) unavailable: %v", share.FundCode, share.Venue, fetchErr)
 				}
+				continue
 			}
-			if series.Basis == "" && etfAdjustedAvailable {
-				series, fetchErr = c.AKTools.FundETFAdjustedClose(ctx, share.FundCode)
-				if fetchErr != nil {
-					etfAdjustedAvailable = false
+			if err := c.Snapshots.Put(snapshotKind, share.FundCode, series, series.Meta); err != nil {
+				return fmt.Errorf("free tracking fund snapshot: %w", err)
+			}
+			value, count, through, reason := AnnualizedTrackingError(series.Points, series.Basis, base.Points, base.Basis, now)
+			if reason != "" {
+				if pass == 1 {
+					log.Printf("free tracking fund %s (%s) skipped: %s", share.FundCode, share.Venue, reason)
 				}
+				continue
 			}
-			if series.Basis == "" {
-				series, fetchErr = c.AKTools.FundETFUnadjustedCloseNoActions(ctx, share.FundCode)
+			basis := "fund_nav_proxy"
+			result := TrackingErrorResult{MethodVersion: TrackingMethodVersion, Value: value, Count: count, Through: through, Basis: basis, BenchmarkSymbol: map[string]string{"NASDAQ100_TR": "QQQ", "SP500_TR": "SPY"}[benchmarkID]}
+			meta := SourceMeta{Provider: series.Meta.Provider + "+" + base.Meta.Provider, SourceURL: series.Meta.SourceURL + " | " + base.Meta.SourceURL, ObservedAt: through, FetchedAt: now}
+			if err := c.Snapshots.Put("tracking_error_proxy", resultKey, result, meta); err != nil {
+				return fmt.Errorf("free tracking result snapshot: %w", err)
 			}
-			snapshotKind = "fund_etf_tracking_series"
-		default:
-			continue
-		}
-		if fetchErr != nil {
-			continue
-		}
-		if err := c.Snapshots.Put(snapshotKind, share.FundCode, series, series.Meta); err != nil {
-			return fmt.Errorf("free tracking fund snapshot: %w", err)
-		}
-		value, count, through, reason := AnnualizedTrackingError(series.Points, series.Basis, base.Points, base.Basis, now)
-		if share.Venue == "etf" && series.Basis != "cumulative_nav_proxy" {
-			value, count, through, reason = AnnualizedQDIIETFTrackingError(series.Points, series.Basis, base.Points, base.Basis, now)
-		}
-		if reason != "" {
-			continue
-		}
-		basis := "fund_nav_proxy"
-		if share.Venue == "etf" && series.Basis != "cumulative_nav_proxy" {
-			basis = "etf_market_price_proxy"
-		}
-		result := TrackingErrorResult{Value: value, Count: count, Through: through, Basis: basis, BenchmarkSymbol: map[string]string{"NASDAQ100_TR": "QQQ", "SP500_TR": "SPY"}[benchmarkID]}
-		meta := SourceMeta{Provider: series.Meta.Provider + "+" + base.Meta.Provider, SourceURL: series.Meta.SourceURL + " | " + base.Meta.SourceURL, ObservedAt: through, FetchedAt: now}
-		if err := c.Snapshots.Put("tracking_error_proxy", share.FundCode+"|"+benchmarkID, result, meta); err != nil {
-			return fmt.Errorf("free tracking result snapshot: %w", err)
+			completed[resultKey] = true
 		}
 	}
 	return nil
+}
+
+func (c *Collector) freeTrackingSeries(ctx context.Context, share database.FundShare) (NAVSeries, string, error) {
+	switch share.Venue {
+	case "otc":
+		series, err := c.AKTools.FundCumulativeNAV(ctx, share.FundCode)
+		return series, "fund_cumulative_nav_proxy", err
+	case "etf":
+		// The public cumulative-NAV route covers exchange-traded QDII funds more
+		// reliably than fund_etf_fund_info_em in the pinned AKShare release. Keep
+		// the ETF-specific route only as a NAV fallback. Market-price deviation is
+		// deliberately not returned as fund tracking error.
+		series, err := c.AKTools.FundCumulativeNAV(ctx, share.FundCode)
+		if err != nil {
+			series, err = c.AKTools.FundETFCumulativeNAV(ctx, share.FundCode)
+		}
+		return series, "fund_etf_tracking_series", err
+	default:
+		return NAVSeries{}, "", fmt.Errorf("unsupported fund venue")
+	}
 }
 func (c *Collector) Run(ctx context.Context) {
 	interval := c.Interval
@@ -198,6 +226,16 @@ func (c *Collector) Run(ctx context.Context) {
 	}
 }
 func (c *Collector) refreshPurchases(ctx context.Context) error {
+	catalog, err := c.AKTools.DiscoverQDII(ctx)
+	if err != nil {
+		return err
+	}
+	catalogByCode := make(map[string]FundCatalogItem, len(catalog))
+	for _, item := range catalog {
+		if isRMBShare(item.Name) {
+			catalogByCode[item.Code] = item
+		}
+	}
 	items, err := c.AKTools.PurchaseLimits(ctx)
 	if err != nil {
 		return err
@@ -206,41 +244,100 @@ func (c *Collector) refreshPurchases(ctx context.Context) error {
 	if c.Now != nil {
 		now = c.Now().UTC()
 	}
-	for _, item := range items {
-		if item.Venue != "otc" || !isRMBShare(item.Name) || !possibleSupportedBenchmark(item.Name) {
-			continue
-		}
-		overview, err := c.AKTools.Overview(ctx, item.FundCode)
-		if err != nil {
-			continue
-		}
-		benchmarkID, ok := exactBenchmarkID(overview.TrackingTarget)
-		if !ok {
-			continue
-		}
-		share := database.FundShare{FundCode: item.FundCode, ShareClass: item.ShareClass, Name: item.Name, Venue: "otc", Active: true, EffectiveFrom: now, CreatedBy: systemActor, UpdatedBy: systemActor}
-		if err := c.Store.UpsertVerifiedFundShareMapping(share, benchmarkID, now); err != nil {
-			return err
-		}
-	}
 	shares, err := c.Store.ListActiveFundShares(now)
 	if err != nil {
 		return err
 	}
 	activeCodes := make(map[string]bool, len(shares))
 	for _, share := range shares {
-		activeCodes[share.FundCode] = true
+		if share.Venue == "otc" {
+			activeCodes[share.FundCode] = true
+		}
 	}
+	snapshottedCodes := make(map[string]bool, len(activeCodes))
+	// Refresh already verified funds first. Discovering brand-new mappings can
+	// require many sequential overview requests and must not hold existing user
+	// rows on an old purchase snapshot.
 	for _, item := range items {
-		if item.Venue != "otc" || !activeCodes[item.FundCode] {
+		if item.Venue != "otc" || !activeCodes[item.FundCode] || snapshottedCodes[item.FundCode] {
 			continue
 		}
-		value := normalizedPurchase{Channel: item.Channel, Status: item.Status, NextOpenDate: item.NextOpenDate, MinimumCents: item.MinimumCents, DailyLimitCents: item.DailyLimitCents}
-		if err := c.Snapshots.Put("purchase_limit", item.FundCode, value, item.Meta); err != nil {
+		if err := c.putPurchase(item); err != nil {
+			return err
+		}
+		snapshottedCodes[item.FundCode] = true
+	}
+	if err := c.refreshPurchaseDetails(ctx, items, snapshottedCodes); err != nil {
+		return err
+	}
+	for _, item := range items {
+		catalogItem, inCatalog := catalogByCode[item.FundCode]
+		if item.Venue != "otc" || !inCatalog || snapshottedCodes[item.FundCode] {
+			continue
+		}
+		candidateName := catalogItem.Name
+		if candidateName == "" {
+			candidateName = item.Name
+		}
+		if !possibleSupportedBenchmark(candidateName) {
+			continue
+		}
+		overview, overviewErr := c.AKTools.Overview(ctx, item.FundCode)
+		if overviewErr != nil {
+			continue
+		}
+		benchmarkID, ok := exactBenchmarkID(overview.TrackingTarget)
+		if !ok {
+			continue
+		}
+		shareClass := catalogItem.ShareClass
+		if shareClass == "" || shareClass == "unknown" {
+			shareClass = item.ShareClass
+		}
+		share := database.FundShare{FundCode: item.FundCode, ShareClass: shareClass, Name: candidateName, Venue: "otc", Active: true, EffectiveFrom: now, CreatedBy: systemActor, UpdatedBy: systemActor}
+		if err := c.Store.UpsertVerifiedFundShareMapping(share, benchmarkID, now); err != nil {
+			return err
+		}
+		// Do not re-query by the just-persisted effective timestamp. MySQL's
+		// millisecond rounding can otherwise exclude this mapping until the
+		// next six-hour refresh.
+		activeCodes[item.FundCode] = true
+		if err := c.putPurchase(item); err != nil {
+			return err
+		}
+		snapshottedCodes[item.FundCode] = true
+	}
+	return nil
+}
+
+func (c *Collector) refreshPurchaseDetails(ctx context.Context, items []PurchaseLimit, mapped map[string]bool) error {
+	if c.PurchaseDetails == nil {
+		return nil
+	}
+	// A failing detail site must not hold up the other data jobs indefinitely.
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	for _, item := range items {
+		if ctx.Err() != nil {
+			break
+		}
+		if !mapped[item.FundCode] || item.DailyLimitCents != nil {
+			continue
+		}
+		detail, err := c.PurchaseDetails.PurchaseDetail(ctx, item.FundCode)
+		if err != nil {
+			continue
+		}
+		if err := c.putPurchase(detail); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (c *Collector) putPurchase(item PurchaseLimit) error {
+	value := normalizedPurchase{Channel: item.Channel, Status: item.Status, RawStatus: item.RawStatus, NextOpenDate: item.NextOpenDate, MinimumCents: item.MinimumCents, DailyLimitCents: item.DailyLimitCents}
+	return c.Snapshots.Put("purchase_limit", item.FundCode, value, item.Meta)
 }
 func (c *Collector) refreshETF(ctx context.Context) error {
 	items, err := c.AKTools.ETFQuotes(ctx)
@@ -300,7 +397,20 @@ func exactBenchmarkID(target string) (string, bool) {
 	}
 }
 func (c *Collector) refreshFX(ctx context.Context) error {
-	items, err := c.ChinaMoney.ReferenceRates(ctx, time.Now())
+	var items []FXRate
+	var err error
+	if c.ChinaMoney != nil {
+		items, err = c.ChinaMoney.ReferenceRates(ctx, time.Now())
+	}
+	if len(items) == 0 {
+		if c.AKTools == nil {
+			if err != nil {
+				return err
+			}
+			return fmt.Errorf("FX provider unavailable")
+		}
+		items, err = c.AKTools.SAFEReferenceRates(ctx)
+	}
 	if err != nil {
 		return err
 	}

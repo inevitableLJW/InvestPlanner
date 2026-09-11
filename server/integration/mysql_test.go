@@ -69,6 +69,8 @@ func testRouter(t *testing.T) *gin.Engine {
 		t.Fatal(err)
 	}
 	for _, table := range []string{
+		"qdii_assistant_confirmations",
+		"market_data_snapshots",
 		"monthly_destination_allocations", "monthly_expenses", "monthly_records",
 		"plan_destinations", "plans", "expense_sources", "sessions", "users",
 	} {
@@ -82,7 +84,11 @@ func testRouter(t *testing.T) *gin.Engine {
 	cfg := config.Config{
 		Environment: "test", WebOrigin: "http://localhost:5173", SessionTTL: time.Hour,
 	}
-	return httpapi.New(cfg, service.New(repository.New(db), time.Hour))
+	store := repository.New(db)
+	app := service.New(store, time.Hour)
+	app.QDII = &service.QDIIService{Store: store, Now: time.Now, FreshFor: 24 * time.Hour}
+	app.FX = &service.FXService{Store: store, Now: time.Now, Enabled: true}
+	return httpapi.New(cfg, app)
 }
 
 func requestJSON(t *testing.T, router http.Handler, method, path string, body any, cookie *http.Cookie) *httptest.ResponseRecorder {
@@ -206,6 +212,121 @@ func TestHealth(t *testing.T) {
 	response := requestJSON(t, router, http.MethodGet, "/healthz", nil, nil)
 	if response.Code != http.StatusOK {
 		t.Fatal(fmt.Sprintf("health status=%d", response.Code))
+	}
+}
+
+func TestQDIIConfirmationPersistsForTheSamePlanMonthAndDestination(t *testing.T) {
+	router := testRouter(t)
+	cookie := register(t, router, "qdii-confirm-user")
+	created := requestJSON(t, router, http.MethodPost, "/api/v1/plans", map[string]any{"name": "QDII 计划"}, cookie)
+	var plan map[string]any
+	if err := json.Unmarshal(created.Body.Bytes(), &plan); err != nil {
+		t.Fatal(err)
+	}
+	destinations := plan["destinations"].([]any)
+	qdii := destinations[2].(map[string]any)
+	for _, raw := range destinations {
+		destination := raw.(map[string]any)
+		destination["active"] = destination["id"] == qdii["id"]
+		destination["allocationBps"] = 0
+	}
+	qdii["allocationBps"] = 10000
+	updated := requestJSON(t, router, http.MethodPut, "/api/v1/plans/"+plan["id"].(string), map[string]any{
+		"name": "QDII 计划", "action": "publish", "defaultContributionBps": 10000,
+		"reserveCents": 0, "roundingUnitCents": 10000, "version": plan["version"], "destinations": destinations,
+	}, cookie)
+	if updated.Code != http.StatusOK {
+		t.Fatalf("publish status=%d body=%s", updated.Code, updated.Body.String())
+	}
+	month := requestJSON(t, router, http.MethodPut, "/api/v1/plans/"+plan["id"].(string)+"/months/2026-08", map[string]any{
+		"incomeCents": 100000, "contributionBps": 10000, "expenses": []any{}, "note": "",
+	}, cookie)
+	if month.Code != http.StatusOK {
+		t.Fatalf("month status=%d body=%s", month.Code, month.Body.String())
+	}
+	path := "/api/v1/plans/" + plan["id"].(string) + "/assistants/qdii/" + qdii["id"].(string)
+	confirmed := requestJSON(t, router, http.MethodPut, path, map[string]any{
+		"month": "2026-08", "selectedOtcFundCodes": []string{}, "selectedEtfFundCode": "513100",
+	}, cookie)
+	if confirmed.Code != http.StatusOK {
+		t.Fatalf("confirm status=%d body=%s", confirmed.Code, confirmed.Body.String())
+	}
+	db, err := database.Open(testDSN(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var firstConfirmation database.QDIIAssistantConfirmation
+	if err := db.Where("destination_id = ?", qdii["id"].(string)).First(&firstConfirmation).Error; err != nil {
+		t.Fatal(err)
+	}
+	reconfirmed := requestJSON(t, router, http.MethodPut, path, map[string]any{
+		"month": "2026-08", "selectedOtcFundCodes": []string{}, "selectedEtfFundCode": "513100",
+	}, cookie)
+	if reconfirmed.Code != http.StatusOK {
+		t.Fatalf("reconfirm status=%d body=%s", reconfirmed.Code, reconfirmed.Body.String())
+	}
+	var updatedConfirmation database.QDIIAssistantConfirmation
+	if err := db.Where("destination_id = ?", qdii["id"].(string)).First(&updatedConfirmation).Error; err != nil {
+		t.Fatal(err)
+	}
+	if updatedConfirmation.ID != firstConfirmation.ID {
+		t.Fatalf("same-month confirmation id changed: before=%s after=%s", firstConfirmation.ID, updatedConfirmation.ID)
+	}
+	if updatedConfirmation.SelectedETFAmountCents == nil || *updatedConfirmation.SelectedETFAmountCents != 100000 {
+		t.Fatalf("selected ETF amount=%v, want 100000", updatedConfirmation.SelectedETFAmountCents)
+	}
+	var confirmationCount int64
+	if err := db.Model(&database.QDIIAssistantConfirmation{}).Where("destination_id = ?", qdii["id"].(string)).Count(&confirmationCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if confirmationCount != 1 {
+		t.Fatalf("same-month confirmation count=%d, want 1", confirmationCount)
+	}
+	loaded := requestJSON(t, router, http.MethodGet, path+"?remainingNeedCents=100000&month=2026-08", nil, cookie)
+	if loaded.Code != http.StatusOK || !bytes.Contains(loaded.Body.Bytes(), []byte(`"selectedOtcFundCodes":[]`)) || !bytes.Contains(loaded.Body.Bytes(), []byte(`"selectedOtcPlans":[]`)) || !bytes.Contains(loaded.Body.Bytes(), []byte(`"selectedEtfFundCode":"513100"`)) || !bytes.Contains(loaded.Body.Bytes(), []byte(`"selectedEtfAmountCents":100000`)) {
+		t.Fatalf("load status=%d body=%s", loaded.Code, loaded.Body.String())
+	}
+	summaries := requestJSON(t, router, http.MethodGet, "/api/v1/plans/"+plan["id"].(string)+"/months/2026-08/qdii-confirmations", nil, cookie)
+	if summaries.Code != http.StatusOK || !bytes.Contains(summaries.Body.Bytes(), []byte(`"destinationId":"`+qdii["id"].(string)+`"`)) || !bytes.Contains(summaries.Body.Bytes(), []byte(`"fundCode":"513100"`)) || !bytes.Contains(summaries.Body.Bytes(), []byte(`"selectedEtfAmountCents":100000`)) {
+		t.Fatalf("summary status=%d body=%s", summaries.Code, summaries.Body.String())
+	}
+}
+
+func TestFXForecastReturnsCNYDemandWithoutRateSnapshots(t *testing.T) {
+	router := testRouter(t)
+	cookie := register(t, router, "fx-default-user")
+	created := requestJSON(t, router, http.MethodPost, "/api/v1/plans", map[string]any{"name": "美股计划"}, cookie)
+	var plan map[string]any
+	if err := json.Unmarshal(created.Body.Bytes(), &plan); err != nil {
+		t.Fatal(err)
+	}
+	destinations := []map[string]any{{
+		"name": "苹果", "active": true, "allocationBps": 10000, "sortOrder": 0,
+		"executionMode": "direct_us", "settlementCurrency": "USD", "benchmarkId": "", "fxQuotaRelevant": true,
+	}}
+	updated := requestJSON(t, router, http.MethodPut, "/api/v1/plans/"+plan["id"].(string), map[string]any{
+		"name": "美股计划", "action": "publish", "defaultContributionBps": 10000,
+		"reserveCents": 0, "roundingUnitCents": 10000, "version": plan["version"], "destinations": destinations,
+	}, cookie)
+	if updated.Code != http.StatusOK {
+		t.Fatalf("publish status=%d body=%s", updated.Code, updated.Body.String())
+	}
+	month := requestJSON(t, router, http.MethodPut, "/api/v1/plans/"+plan["id"].(string)+"/months/2026-08", map[string]any{
+		"incomeCents": 100000, "contributionBps": 10000, "expenses": []any{}, "note": "",
+	}, cookie)
+	if month.Code != http.StatusOK {
+		t.Fatalf("month status=%d body=%s", month.Code, month.Body.String())
+	}
+	forecast := requestJSON(t, router, http.MethodGet, "/api/v1/plans/"+plan["id"].(string)+"/assistants/fx?window=rolling_12", nil, cookie)
+	if forecast.Code != http.StatusOK {
+		t.Fatalf("forecast status=%d body=%s", forecast.Code, forecast.Body.String())
+	}
+	var payload service.FXForecast
+	if err := json.Unmarshal(forecast.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Status != "fresh" || len(payload.Currencies) != 1 || payload.Currencies[0] != "USD" || len(payload.Summaries) != 1 || payload.Summaries[0].CNYCents == nil || *payload.Summaries[0].CNYCents == 0 || payload.Summaries[0].ForeignAmount != nil {
+		t.Fatalf("forecast without rates=%s", forecast.Body.String())
 	}
 }
 func TestSessionRestoreCookieAndExpiry(t *testing.T) {

@@ -1,10 +1,12 @@
 package service
 
 import (
+	"encoding/json"
 	"math"
 	"testing"
 	"time"
 
+	"investplanner/server/internal/database"
 	"investplanner/server/internal/marketdata"
 )
 
@@ -80,5 +82,93 @@ func TestETFRequiresIOPVAndChoosesLowestAbsolutePremium(t *testing.T) {
 	missing := QDIICandidate{PremiumRate: unknownValue[float64]("missing")}
 	if betterETF(missing, first) {
 		t.Fatal("missing IOPV/premium cannot win")
+	}
+}
+
+func TestQDIIConfirmationValidatesAndNormalizesCurrentCandidates(t *testing.T) {
+	result := QDIIResult{
+		OTC:  []QDIICandidate{{FundCode: "000001", PurchaseStatus: "open"}, {FundCode: "000002", PurchaseStatus: "suspended"}},
+		ETFs: []QDIICandidate{{FundCode: "159501"}},
+	}
+	otc, etf, err := validateQDIISelection(result, []string{" 000001 ", "000001"}, "159501")
+	if err != nil || len(otc) != 1 || otc[0] != "000001" || etf != "159501" {
+		t.Fatalf("otc=%v etf=%q err=%v", otc, etf, err)
+	}
+	if _, _, err := validateQDIISelection(result, []string{"000002"}, ""); err == nil {
+		t.Fatal("suspended OTC fund must not be confirmable")
+	}
+	if _, _, err := validateQDIISelection(result, []string{"999999"}, ""); err == nil {
+		t.Fatal("unmapped OTC fund must not be confirmable")
+	}
+	if _, _, err := validateQDIISelection(result, nil, "999999"); err == nil {
+		t.Fatal("unmapped ETF must not be confirmable")
+	}
+}
+
+func TestCalculateSelectedETFAmountUsesConfirmedOTCCapacity(t *testing.T) {
+	firstCapacity := int64(12000)
+	secondCapacity := int64(8000)
+	result := QDIIResult{OTC: []QDIICandidate{
+		{FundCode: "000001", ExecutableCapacityCents: AssistantValue[int64]{Value: &firstCapacity}},
+		{FundCode: "000002", ExecutableCapacityCents: AssistantValue[int64]{Value: &secondCapacity}},
+	}}
+	amount := calculateSelectedETFAmount(result, []string{"000001", "000002"}, "159501", 100000)
+	if amount == nil || *amount != 80000 {
+		t.Fatalf("amount=%v, want 80000", amount)
+	}
+	if unknown := calculateSelectedETFAmount(QDIIResult{OTC: []QDIICandidate{{FundCode: "000001"}}}, []string{"000001"}, "159501", 100000); unknown != nil {
+		t.Fatalf("unknown capacity must keep ETF amount unknown: %v", *unknown)
+	}
+	if withoutETF := calculateSelectedETFAmount(result, []string{"000001"}, "", 100000); withoutETF != nil {
+		t.Fatalf("confirmation without ETF must not have an ETF amount: %v", *withoutETF)
+	}
+}
+
+func TestBuildSelectedOTCPlansKeepsDailyAndMonthlyAmounts(t *testing.T) {
+	daily := int64(500)
+	total := int64(9000)
+	result := QDIIResult{OTC: []QDIICandidate{
+		{FundCode: "000001", DailyLimitCents: AssistantValue[int64]{Value: &daily}, ExecutableCapacityCents: AssistantValue[int64]{Value: &total}},
+		{FundCode: "000002"},
+	}}
+	plans := buildSelectedOTCPlans(result, []string{"000001", "000002"})
+	if len(plans) != 2 || plans[0].DailyAmountCents == nil || *plans[0].DailyAmountCents != daily || plans[0].TotalAmountCents == nil || *plans[0].TotalAmountCents != total {
+		t.Fatalf("plans=%#v", plans)
+	}
+	if plans[1].DailyAmountCents != nil || plans[1].TotalAmountCents != nil {
+		t.Fatalf("unknown amounts must remain nil: %#v", plans[1])
+	}
+}
+
+func TestBuildQDIIConfirmationSummariesIncludesPersistedFundNames(t *testing.T) {
+	selectedOTC, err := json.Marshal([]string{"270042", "006479"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmedAt := time.Date(2026, 8, 27, 1, 0, 0, 0, time.UTC)
+	etfAmount := int64(77500)
+	dailyA, totalA := int64(500), int64(10000)
+	dailyC, totalC := int64(500), int64(12500)
+	selectedOTCPlans, err := json.Marshal([]QDIIConfirmedOTCPlan{
+		{FundCode: "270042", DailyAmountCents: &dailyA, TotalAmountCents: &totalA},
+		{FundCode: "006479", DailyAmountCents: &dailyC, TotalAmountCents: &totalC},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	summaries, err := buildQDIIConfirmationSummaries(
+		[]database.QDIIAssistantConfirmation{{DestinationID: "q1", SelectedOTCFundCodesJSON: selectedOTC, SelectedOTCPlansJSON: selectedOTCPlans, SelectedETFFundCode: "513100", SelectedETFAmountCents: &etfAmount, ConfirmedAt: confirmedAt}},
+		[]database.FundShare{
+			{FundCode: "270042", Name: "广发纳斯达克100ETF联接人民币(QDII)A", ShareClass: "A"},
+			{FundCode: "006479", Name: "广发纳斯达克100ETF联接人民币(QDII)C", ShareClass: "C"},
+			{FundCode: "513100", Name: "纳指ETF国泰", ShareClass: "ETF"},
+		},
+	)
+	if err != nil || len(summaries) != 1 {
+		t.Fatalf("summaries=%#v err=%v", summaries, err)
+	}
+	summary := summaries[0]
+	if summary.DestinationID != "q1" || len(summary.SelectedOTCFunds) != 2 || summary.SelectedOTCFunds[0].Name == "" || summary.SelectedOTCFunds[0].DailyAmountCents == nil || *summary.SelectedOTCFunds[0].DailyAmountCents != dailyA || summary.SelectedOTCFunds[1].TotalAmountCents == nil || *summary.SelectedOTCFunds[1].TotalAmountCents != totalC || summary.SelectedETFFund == nil || summary.SelectedETFFund.Name != "纳指ETF国泰" || summary.SelectedETFAmountCents == nil || *summary.SelectedETFAmountCents != etfAmount || !summary.ConfirmedAt.Equal(confirmedAt) {
+		t.Fatalf("summary=%#v", summary)
 	}
 }

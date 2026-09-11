@@ -1,4 +1,4 @@
-name: invest-planner-dev
+name: investplanner
 
 services:
   mysql:
@@ -11,7 +11,7 @@ services:
     ports:
       - "3306:3306"
     volumes:
-      - invest-planner-mysql:/var/lib/mysql
+      - mysql-data:/var/lib/mysql
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-proot-password"]
       interval: 5s
@@ -19,4 +19,6 @@ services:
       retries: 20
 
 volumes:
-  invest-planner-mysql:
+  mysql-data:
+    external: true
+    name: investplanner-mysql-data

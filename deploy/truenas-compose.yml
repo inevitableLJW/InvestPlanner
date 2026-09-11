@@ -54,7 +54,7 @@ services:
       SESSION_TTL: 1h
       AKTOOLS_BASE_URL: http://aktools:8080
       MARKET_DATA_PRODUCTION_APPROVED: "true"
-      FX_ASSISTANT_ENABLED: "false"
+      FX_ASSISTANT_ENABLED: "true"
       TZ: Asia/Shanghai
     depends_on:
       mysql:

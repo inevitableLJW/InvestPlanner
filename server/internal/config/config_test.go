@@ -31,6 +31,7 @@ func TestLoadDefaultsToOneHourAndAutomaticSecureCookie(t *testing.T) {
 	t.Setenv("MYSQL_DSN", "user:password@tcp(127.0.0.1:3306)/planner?parseTime=true")
 	t.Setenv("SESSION_TTL", "")
 	t.Setenv("COOKIE_SECURE", "")
+	t.Setenv("FX_ASSISTANT_ENABLED", "")
 
 	cfg, err := Load()
 	if err != nil {
@@ -41,6 +42,9 @@ func TestLoadDefaultsToOneHourAndAutomaticSecureCookie(t *testing.T) {
 	}
 	if cfg.CookieSecureMode != CookieSecureAuto {
 		t.Fatalf("CookieSecureMode = %v, want auto", cfg.CookieSecureMode)
+	}
+	if !cfg.FXAssistantEnabled {
+		t.Fatal("annual FX forecast must be enabled by default")
 	}
 }
 

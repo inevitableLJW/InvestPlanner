@@ -19,6 +19,7 @@ type FundCatalogItem struct {
 type PurchaseLimit struct {
 	FundCode, Name, ShareClass    string
 	Venue, Channel, Status        string
+	RawStatus                     string
 	NextOpenDate                  *time.Time
 	MinimumCents, DailyLimitCents *int64
 	Meta                          SourceMeta
@@ -83,7 +84,7 @@ const (
 )
 
 func Classify(fetchedAt, now time.Time, freshFor time.Duration) Availability {
-	if fetchedAt.IsZero() {
+	if fetchedAt.IsZero() || fetchedAt.After(now) {
 		return Unavailable
 	}
 	if now.Sub(fetchedAt) <= freshFor {

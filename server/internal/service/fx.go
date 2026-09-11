@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"time"
 
@@ -11,15 +12,10 @@ import (
 	"investplanner/server/internal/repository"
 )
 
-const FXComplianceNotice = "年度便利化额度仅是资金规划参考，不是绝对购汇上限，也不代表或构成境外证券投资许可。"
-
 type FXService struct {
-	Store              *repository.Store
-	Now                func() time.Time
-	Enabled            bool
-	QuotaUSD           float64
-	QuotaSource        string
-	QuotaEffectiveDate string
+	Store   *repository.Store
+	Now     func() time.Time
+	Enabled bool
 }
 type FXDetail struct {
 	DestinationID string `json:"destinationId"`
@@ -58,10 +54,6 @@ type FXForecast struct {
 	Months                     []FXMonth           `json:"months"`
 	Summaries                  []FXCurrencySummary `json:"summaries"`
 	Rates                      []FXRateInfo        `json:"rates"`
-	QuotaUSD                   float64             `json:"quotaUsd"`
-	QuotaSource                string              `json:"quotaSource"`
-	QuotaEffectiveDate         string              `json:"quotaEffectiveDate"`
-	ComplianceNotice           string              `json:"complianceNotice"`
 	UnclassifiedDestinationIDs []string            `json:"unclassifiedDestinationIds,omitempty"`
 }
 type fxSnapshot struct {
@@ -77,10 +69,7 @@ func (s *FXService) Forecast(userID, planID, window string, scenarios map[string
 	if err != nil {
 		return FXForecast{}, err
 	}
-	result := FXForecast{Window: window, Status: "fresh", Currencies: []string{}, Months: []FXMonth{}, Summaries: []FXCurrencySummary{}, Rates: []FXRateInfo{}, QuotaUSD: s.QuotaUSD, QuotaSource: s.QuotaSource, QuotaEffectiveDate: s.QuotaEffectiveDate, ComplianceNotice: FXComplianceNotice}
-	if result.QuotaUSD == 0 {
-		result.QuotaUSD = 50000
-	}
+	result := FXForecast{Window: window, Status: "fresh", Currencies: []string{}, Months: []FXMonth{}, Summaries: []FXCurrencySummary{}, Rates: []FXRateInfo{}}
 	profiles := map[string]database.PlanDestination{}
 	currencySet := map[string]bool{}
 	for _, d := range planModel.Destinations {
@@ -116,7 +105,7 @@ func (s *FXService) Forecast(userID, planID, window string, scenarios map[string
 	rates := map[string]FXRateInfo{}
 	for _, currency := range []string{"USD", "HKD"} {
 		if value, ok := scenarios[currency]; ok {
-			if value <= 0 || value > 1000 {
+			if value <= 0 || value > 1000 || math.IsNaN(value) || math.IsInf(value, 0) {
 				return FXForecast{}, fmt.Errorf("%w: 情景汇率必须大于 0 且不超过 1000", ErrValidation)
 			}
 			rates[currency] = FXRateInfo{Currency: currency, CNYPerUnit: value, Provider: "user_scenario", Assumption: "scenario", ObservedAt: now, Freshness: "fresh"}
@@ -127,11 +116,8 @@ func (s *FXService) Forecast(userID, planID, window string, scenarios map[string
 		if err != nil {
 			snap, err = s.Store.GetSnapshot("fx_rate_fallback", currency)
 		}
-		if err == nil && json.Unmarshal(snap.NormalizedJSON, &data) == nil && data.CNYPerUnit > 0 {
-			freshness := "fresh"
-			if now.Sub(snap.FetchedAt) > 36*time.Hour {
-				freshness = "stale"
-			}
+		if err == nil && json.Unmarshal(snap.NormalizedJSON, &data) == nil && validPositive(&data.CNYPerUnit) && fxRateFreshness(snap, now) != "unavailable" {
+			freshness := fxRateFreshness(snap, now)
 			rates[currency] = FXRateInfo{Currency: currency, CNYPerUnit: data.CNYPerUnit, Provider: snap.Provider, SourceURL: snap.SourceURL, ObservedAt: snap.ObservedAt, Assumption: "latest_midpoint_static", Freshness: freshness}
 		}
 	}
@@ -155,6 +141,7 @@ func (s *FXService) Forecast(userID, planID, window string, scenarios map[string
 		baseline = &loaded
 	}
 	totals := map[string]int64{}
+	totalsKnown := true
 	cumulative := 0.0
 	cumulativeKnown := true
 	for _, month := range months {
@@ -184,6 +171,9 @@ func (s *FXService) Forecast(userID, planID, window string, scenarios map[string
 		for _, currency := range result.Currencies {
 			entry := FXMonth{Month: month, Currency: currency, Details: byCurrency[currency]}
 			if !known {
+				totalsKnown = false
+				result.Status = "unavailable"
+				result.Reason = "缺少可复用的权威月度建议基线"
 				entry.Reason = "缺少可复用的权威月度建议基线"
 				cumulativeKnown = false
 				result.Months = append(result.Months, entry)
@@ -198,8 +188,15 @@ func (s *FXService) Forecast(userID, planID, window string, scenarios map[string
 			rate, hasRate := rates[currency]
 			usdRate, hasUSD := rates["USD"]
 			if hasRate {
+				if rate.Freshness == "stale" && result.Status == "fresh" {
+					result.Status = "stale"
+					result.Reason = "规划汇率包含陈旧观测值"
+				}
 				foreign := float64(cny) / 100 / rate.CNYPerUnit
 				entry.ForeignAmount = &foreign
+			} else {
+				entry.Reason = "必要的 " + currency + " 参考汇率不可用"
+				result.Status = "unavailable"
 			}
 			if hasUSD {
 				usd := float64(cny) / 100 / usdRate.CNYPerUnit
@@ -217,15 +214,35 @@ func (s *FXService) Forecast(userID, planID, window string, scenarios map[string
 		}
 	}
 	for _, currency := range result.Currencies {
-		total := totals[currency]
-		summary := FXCurrencySummary{Currency: currency, CNYCents: &total}
-		if rate, ok := rates[currency]; ok {
-			foreign := float64(total) / 100 / rate.CNYPerUnit
-			summary.ForeignAmount = &foreign
-		}
+		summary := fxSummary(currency, totals[currency], totalsKnown, rates[currency])
 		result.Summaries = append(result.Summaries, summary)
 	}
 	return result, nil
+}
+
+func fxSummary(currency string, total int64, known bool, rate FXRateInfo) FXCurrencySummary {
+	summary := FXCurrencySummary{Currency: currency}
+	if !known {
+		return summary
+	}
+	summary.CNYCents = &total
+	if validPositive(&rate.CNYPerUnit) {
+		foreign := float64(total) / 100 / rate.CNYPerUnit
+		if !math.IsInf(foreign, 0) {
+			summary.ForeignAmount = &foreign
+		}
+	}
+	return summary
+}
+
+func fxRateFreshness(snap database.MarketDataSnapshot, now time.Time) string {
+	if snap.ObservedAt.IsZero() || snap.FetchedAt.IsZero() || snap.ObservedAt.After(now) || snap.FetchedAt.After(now) {
+		return "unavailable"
+	}
+	if now.Sub(snap.FetchedAt) > 36*time.Hour || now.Sub(snap.ObservedAt) > 4*24*time.Hour {
+		return "stale"
+	}
+	return "fresh"
 }
 
 func fxCurrencyFor(destination database.PlanDestination) string {

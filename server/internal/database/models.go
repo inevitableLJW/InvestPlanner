@@ -164,6 +164,21 @@ type MonthlyRecord struct {
 	Plan                  Plan                           `gorm:"constraint:OnDelete:CASCADE"`
 	Expenses              []MonthlyExpense               `gorm:"constraint:OnDelete:CASCADE"`
 	Allocations           []MonthlyDestinationAllocation `gorm:"constraint:OnDelete:CASCADE"`
+	QDIIConfirmations     []QDIIAssistantConfirmation    `gorm:"constraint:OnDelete:CASCADE"`
+}
+
+type QDIIAssistantConfirmation struct {
+	ID                       string `gorm:"type:char(36);primaryKey"`
+	MonthlyRecordID          string `gorm:"type:char(36);not null;uniqueIndex:idx_qdii_confirmation"`
+	DestinationID            string `gorm:"type:char(36);not null;uniqueIndex:idx_qdii_confirmation"`
+	SelectedOTCFundCodesJSON []byte `gorm:"type:json;not null"`
+	SelectedOTCPlansJSON     []byte `gorm:"type:json"`
+	SelectedETFFundCode      string `gorm:"size:32;not null;default:''"`
+	SelectedETFAmountCents   *int64
+	ConfirmedAt              time.Time `gorm:"not null"`
+	CreatedAt                time.Time
+	UpdatedAt                time.Time
+	MonthlyRecord            MonthlyRecord `gorm:"constraint:OnDelete:CASCADE"`
 }
 
 type MonthlyExpense struct {

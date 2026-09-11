@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -18,22 +20,68 @@ type AKToolsClient struct {
 	Now     func() time.Time
 }
 
+const SAFEReferenceRateSource = "https://www.safe.gov.cn/safe/rmbhlzjj/index.html"
+
 func NewAKToolsClient(baseURL string, timeout time.Duration) *AKToolsClient {
 	return &AKToolsClient{BaseURL: strings.TrimRight(baseURL, "/"), HTTP: &http.Client{Timeout: timeout}, Now: time.Now}
 }
 
 func (c *AKToolsClient) rows(ctx context.Context, fn string, query url.Values) ([]map[string]any, string, error) {
-	rows, source, err := c.rowsAllowEmpty(ctx, fn, query)
-	if err != nil {
-		return nil, source, err
+	var source string
+	for attempt := 0; attempt < 3; attempt++ {
+		rows, currentSource, err := c.rowsAllowEmpty(ctx, fn, query)
+		source = currentSource
+		if err != nil {
+			return nil, source, err
+		}
+		if len(rows) > 0 {
+			return rows, source, nil
+		}
+		if attempt < 2 {
+			select {
+			case <-ctx.Done():
+				return nil, source, ctx.Err()
+			case <-time.After(time.Duration(attempt+1) * 200 * time.Millisecond):
+			}
+		}
 	}
-	if len(rows) == 0 {
-		return nil, source, fmt.Errorf("aktools empty response")
-	}
-	return rows, source, nil
+	return nil, source, fmt.Errorf("aktools empty response")
 }
 
 func (c *AKToolsClient) rowsAllowEmpty(ctx context.Context, fn string, query url.Values) ([]map[string]any, string, error) {
+	var lastErr error
+	var source string
+	attempts := 3
+	if fn == "fund_open_fund_info_em" {
+		// EastMoney's cumulative-NAV route is authoritative for the free
+		// tracking proxy but intermittently closes TLS connections. Give this
+		// small, per-fund request a wider retry budget than broad market calls.
+		attempts = 6
+	}
+	for attempt := 0; attempt < attempts; attempt++ {
+		rows, currentSource, err := c.rowsAllowEmptyOnce(ctx, fn, query)
+		source = currentSource
+		if err == nil {
+			return rows, source, nil
+		}
+		lastErr = err
+		if attempt == attempts-1 {
+			break
+		}
+		backoffStep := attempt + 1
+		if backoffStep > 3 {
+			backoffStep = 3
+		}
+		select {
+		case <-ctx.Done():
+			return nil, source, ctx.Err()
+		case <-time.After(time.Duration(backoffStep) * 200 * time.Millisecond):
+		}
+	}
+	return nil, source, lastErr
+}
+
+func (c *AKToolsClient) rowsAllowEmptyOnce(ctx context.Context, fn string, query url.Values) ([]map[string]any, string, error) {
 	source := c.BaseURL + "/api/public/" + fn
 	if encoded := query.Encode(); encoded != "" {
 		source += "?" + encoded
@@ -100,7 +148,12 @@ func (c *AKToolsClient) PurchaseLimits(ctx context.Context) ([]PurchaseLimit, er
 		nextOpen := parseOptionalDate(first(row, "下一开放日", "开放日"))
 		minimum := parseCNYCents(first(row, "购买起点", "起购金额", "最低购买额"))
 		limit := parseCNYCents(first(row, "日累计限定金额", "日累计限额", "日限额"))
-		result = append(result, PurchaseLimit{FundCode: code, Name: name, ShareClass: inferShareClass(name), Venue: venue, Channel: "天天基金", Status: normalizePurchaseStatus(status), NextOpenDate: nextOpen, MinimumCents: minimum, DailyLimitCents: limit, Meta: SourceMeta{Provider: "aktools", SourceURL: source, ObservedAt: now, FetchedAt: now}})
+		// The upstream list uses zero even for restricted purchases. It does
+		// not establish either a zero allowance or an unlimited allowance.
+		if limit != nil && (*limit <= 0 || (minimum != nil && *limit < *minimum)) {
+			limit = nil
+		}
+		result = append(result, PurchaseLimit{FundCode: code, Name: name, ShareClass: inferShareClass(name), Venue: venue, Channel: "天天基金", Status: normalizePurchaseStatus(status), RawStatus: status, NextOpenDate: nextOpen, MinimumCents: minimum, DailyLimitCents: limit, Meta: SourceMeta{Provider: "aktools", SourceURL: source, ObservedAt: now, FetchedAt: now}})
 	}
 	return result, nil
 }
@@ -229,7 +282,9 @@ func (c *AKToolsClient) USFundAdjustedClose(ctx context.Context, symbol string) 
 	if err != nil {
 		return BenchmarkSeries{}, err
 	}
-	points, err := parsePoints(rows, []string{"date", "日期"}, []string{"close", "收盘"})
+	// Sina's much older additive-adjusted prices can be negative. Those dates
+	// are outside our one-year calculation and must not invalidate its inputs.
+	points, err := parsePoints(rows, []string{"date", "日期"}, []string{"close", "收盘"}, c.Now().UTC().AddDate(-1, 0, -30))
 	if err != nil {
 		return BenchmarkSeries{}, err
 	}
@@ -252,6 +307,43 @@ func (c *AKToolsClient) USDCNYReferenceHistory(ctx context.Context) (BenchmarkSe
 		points[i].Value /= 100
 	}
 	return BenchmarkSeries{BenchmarkID: "USDCNY", Basis: "safe_middle_rate", Points: points, Meta: SourceMeta{Provider: "aktools", SourceURL: source, ObservedAt: points[len(points)-1].Date, FetchedAt: c.Now().UTC()}}, nil
+}
+
+// SAFEReferenceRates returns the latest official USD/HKD central parity rates
+// exposed by AKShare. SAFE quotes both currencies as CNY per 100 units, so the
+// values are normalized to CNY per single currency unit before persistence.
+func (c *AKToolsClient) SAFEReferenceRates(ctx context.Context) ([]FXRate, error) {
+	rows, _, err := c.rows(ctx, "currency_boc_safe", nil)
+	if err != nil {
+		return nil, err
+	}
+	var latestDate time.Time
+	var latestUSD, latestHKD float64
+	for _, row := range rows {
+		dateText, ok := textField(row, "日期", "date")
+		if !ok {
+			continue
+		}
+		date, parseErr := parseDate(dateText)
+		if parseErr != nil {
+			continue
+		}
+		usd := parseFloatPtr(first(row, "美元", "USD"))
+		hkd := parseFloatPtr(first(row, "港元", "HKD"))
+		if usd == nil || hkd == nil || *usd <= 0 || *hkd <= 0 || !date.After(latestDate) {
+			continue
+		}
+		latestDate, latestUSD, latestHKD = date, *usd/100, *hkd/100
+	}
+	if latestDate.IsZero() {
+		return nil, fmt.Errorf("SAFE reference rates unavailable")
+	}
+	fetchedAt := c.Now().UTC()
+	meta := SourceMeta{Provider: "safe", SourceURL: SAFEReferenceRateSource, ObservedAt: latestDate, FetchedAt: fetchedAt}
+	return []FXRate{
+		{Currency: "USD", Unit: "CNY/100", CNYPerUnit: latestUSD, Meta: meta},
+		{Currency: "HKD", Unit: "CNY/100", CNYPerUnit: latestHKD, Meta: meta},
+	}, nil
 }
 
 func CNYAdjustedBenchmark(etf, fx BenchmarkSeries) (BenchmarkSeries, error) {
@@ -307,10 +399,18 @@ func (c *AKToolsClient) ETFQuotes(ctx context.Context) ([]ETFQuote, error) {
 		name, _ := textField(row, "名称", "基金简称")
 		price := parseFloatPtr(first(row, "最新价", "最新"))
 		iopv := parseFloatPtr(first(row, "IOPV实时估值", "IOPV"))
+		if price != nil && *price <= 0 {
+			price = nil
+		}
+		if iopv != nil && *iopv <= 0 {
+			iopv = nil
+		}
 		var premiumRate *float64
 		if price != nil && iopv != nil && *iopv > 0 {
 			value := *price/(*iopv) - 1
-			premiumRate = &value
+			if !math.IsInf(value, 0) {
+				premiumRate = &value
+			}
 		}
 		result = append(result, ETFQuote{FundCode: code, Name: name, Price: price, IOPV: iopv, PremiumRate: premiumRate, Meta: SourceMeta{Provider: "aktools", SourceURL: source, ObservedAt: now, FetchedAt: now}})
 	}
@@ -369,10 +469,13 @@ func inferShareClass(name string) string {
 	return "unknown"
 }
 func normalizePurchaseStatus(v string) string {
+	if strings.Contains(v, "暂停大额") || strings.Contains(v, "限大额") || strings.Contains(v, "限额") {
+		return "limited"
+	}
 	if strings.Contains(v, "暂停") {
 		return "suspended"
 	}
-	if strings.Contains(v, "开放") || strings.Contains(v, "限额") || strings.Contains(v, "限大额") {
+	if strings.Contains(v, "开放申购") || strings.Contains(v, "开放购买") {
 		return "open"
 	}
 	return "unknown"
@@ -384,7 +487,7 @@ func parseFloatPtr(v any) *float64 {
 	}
 	s = strings.ReplaceAll(strings.TrimSuffix(s, "%"), ",", "")
 	f, err := strconv.ParseFloat(s, 64)
-	if err != nil {
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
 		return nil
 	}
 	return &f
@@ -398,13 +501,13 @@ func parsePercent(v any) *float64 {
 }
 func parseCNYCents(v any) *int64 {
 	p := parseFloatPtr(v)
-	if p == nil {
+	if p == nil || *p < 0 || *p >= float64(math.MaxInt64)/100 {
 		return nil
 	}
 	cents := int64(*p*100 + 0.5)
 	return &cents
 }
-func parsePoints(rows []map[string]any, dateKeys, valueKeys []string) ([]SeriesPoint, error) {
+func parsePoints(rows []map[string]any, dateKeys, valueKeys []string, since ...time.Time) ([]SeriesPoint, error) {
 	points := make([]SeriesPoint, 0, len(rows))
 	for _, row := range rows {
 		d, ok := textField(row, dateKeys...)
@@ -415,14 +518,30 @@ func parsePoints(rows []map[string]any, dateKeys, valueKeys []string) ([]SeriesP
 		if err != nil {
 			return nil, fmt.Errorf("series date contract changed")
 		}
-		v := parseFloatPtr(first(row, valueKeys...))
-		if v == nil {
+		if len(since) > 0 && date.Before(since[0]) {
+			continue
+		}
+		rawValue := first(row, valueKeys...)
+		if rawValue == nil {
+			// A missing observation is not a zero return and does not invalidate
+			// the surrounding history. Omit that date; downstream coverage checks
+			// still reject a series that no longer has enough valid observations.
+			continue
+		}
+		v := parseFloatPtr(rawValue)
+		if v == nil || *v <= 0 {
 			return nil, fmt.Errorf("series value contract changed")
 		}
 		points = append(points, SeriesPoint{Date: date, Value: *v})
 	}
 	if len(points) == 0 {
 		return nil, fmt.Errorf("empty series")
+	}
+	sort.Slice(points, func(i, j int) bool { return points[i].Date.Before(points[j].Date) })
+	for i := 1; i < len(points); i++ {
+		if points[i].Date.Equal(points[i-1].Date) {
+			return nil, fmt.Errorf("duplicate series date")
+		}
 	}
 	return points, nil
 }

@@ -268,6 +268,45 @@ func Migrate(db *gorm.DB) error {
 				return err
 			}
 		}
+
+		count = 0
+		if err := tx.Model(&SchemaMigration{}).Where("version = ?", 10).Count(&count).Error; err != nil {
+			return err
+		}
+		if count == 0 {
+			if err := tx.AutoMigrate(&QDIIAssistantConfirmation{}); err != nil {
+				return fmt.Errorf("migration 10 QDII assistant confirmations: %w", err)
+			}
+			if err := tx.Create(&SchemaMigration{Version: 10, AppliedAt: time.Now().UTC()}).Error; err != nil {
+				return err
+			}
+		}
+
+		count = 0
+		if err := tx.Model(&SchemaMigration{}).Where("version = ?", 11).Count(&count).Error; err != nil {
+			return err
+		}
+		if count == 0 {
+			if err := tx.AutoMigrate(&QDIIAssistantConfirmation{}); err != nil {
+				return fmt.Errorf("migration 11 QDII ETF confirmation amount: %w", err)
+			}
+			if err := tx.Create(&SchemaMigration{Version: 11, AppliedAt: time.Now().UTC()}).Error; err != nil {
+				return err
+			}
+		}
+
+		count = 0
+		if err := tx.Model(&SchemaMigration{}).Where("version = ?", 12).Count(&count).Error; err != nil {
+			return err
+		}
+		if count == 0 {
+			if err := tx.AutoMigrate(&QDIIAssistantConfirmation{}); err != nil {
+				return fmt.Errorf("migration 12 QDII OTC confirmation amounts: %w", err)
+			}
+			if err := tx.Create(&SchemaMigration{Version: 12, AppliedAt: time.Now().UTC()}).Error; err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 }

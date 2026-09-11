@@ -31,8 +31,31 @@ func TestForecastMonths(t *testing.T) {
 		t.Fatal(next)
 	}
 }
-func TestComplianceNoticeDoesNotClaimInvestmentPermission(t *testing.T) {
-	if FXComplianceNotice == "" {
-		t.Fatal("missing notice")
+
+func TestFXUnknownSummaryIsNotZero(t *testing.T) {
+	rate := FXRateInfo{CNYPerUnit: 7}
+	unknown := fxSummary("USD", 0, false, rate)
+	if unknown.CNYCents != nil || unknown.ForeignAmount != nil {
+		t.Fatal(unknown)
+	}
+	zero := fxSummary("USD", 0, true, rate)
+	if zero.CNYCents == nil || zero.ForeignAmount == nil || *zero.ForeignAmount != 0 {
+		t.Fatal(zero)
+	}
+	missingRate := fxSummary("USD", 70000, true, FXRateInfo{})
+	if missingRate.CNYCents == nil || missingRate.ForeignAmount != nil {
+		t.Fatal(missingRate)
+	}
+}
+
+func TestFXFreshFetchDoesNotHideOldOrFutureObservation(t *testing.T) {
+	now := time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		observed time.Time
+		want     string
+	}{{now.AddDate(0, 0, -1), "fresh"}, {now.AddDate(0, 0, -30), "stale"}, {now.AddDate(0, 0, 1), "unavailable"}, {time.Time{}, "unavailable"}} {
+		if got := fxRateFreshness(database.MarketDataSnapshot{ObservedAt: tc.observed, FetchedAt: now}, now); got != tc.want {
+			t.Fatalf("%v: %s", tc, got)
+		}
 	}
 }

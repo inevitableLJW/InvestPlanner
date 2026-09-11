@@ -3,6 +3,7 @@ package httpapi
 import (
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -19,16 +20,60 @@ func (a *API) qdiiAssistant(c *gin.Context) {
 		}
 		remaining = value
 	}
+	month := c.Query("month")
+	if month != "" {
+		if _, err := time.Parse("2006-01", month); err != nil {
+			returnValidation(c, "计划月份无效")
+			return
+		}
+	}
 	if a.app.QDII == nil {
 		c.JSON(http.StatusOK, gin.H{"destinationId": c.Param("destinationID"), "status": "unavailable", "reason": "QDII 数据服务暂不可用", "otc": []any{}})
 		return
 	}
-	result, err := a.app.QDII.Assist(currentUserID(c), c.Param("planID"), c.Param("destinationID"), remaining)
+	result, err := a.app.QDII.Assist(currentUserID(c), c.Param("planID"), c.Param("destinationID"), remaining, month)
 	if err != nil {
 		handleError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, result)
+}
+
+type confirmQDIIRequest struct {
+	Month                string   `json:"month" binding:"required"`
+	SelectedOTCFundCodes []string `json:"selectedOtcFundCodes"`
+	SelectedETFFundCode  string   `json:"selectedEtfFundCode"`
+}
+
+func (a *API) confirmQDIIAssistant(c *gin.Context) {
+	var request confirmQDIIRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		returnValidation(c, "确认方案参数无效")
+		return
+	}
+	if a.app.QDII == nil {
+		respondError(c, http.StatusServiceUnavailable, "assistant_unavailable", "QDII 数据服务暂不可用", nil)
+		return
+	}
+	confirmation, err := a.app.QDII.Confirm(currentUserID(c), c.Param("planID"), c.Param("destinationID"), request.Month, request.SelectedOTCFundCodes, request.SelectedETFFundCode)
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, confirmation)
+}
+
+func (a *API) qdiiConfirmationSummaries(c *gin.Context) {
+	if a.app.QDII == nil {
+		c.JSON(http.StatusOK, gin.H{"items": []service.QDIIConfirmationSummary{}})
+		return
+	}
+	summaries, err := a.app.QDII.ConfirmationSummaries(currentUserID(c), c.Param("planID"), c.Param("month"))
+	if err != nil {
+		handleError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": summaries})
 }
 
 func (a *API) fxAssistant(c *gin.Context) {
@@ -51,7 +96,7 @@ func (a *API) fxAssistant(c *gin.Context) {
 		scenarios[currency] = value
 	}
 	if a.app.FX == nil {
-		c.JSON(http.StatusOK, service.FXForecast{Window: window, Status: "unavailable", Reason: "年度换汇预测暂不可用", Currencies: []string{}, Months: []service.FXMonth{}, Summaries: []service.FXCurrencySummary{}, Rates: []service.FXRateInfo{}, ComplianceNotice: service.FXComplianceNotice})
+		c.JSON(http.StatusOK, service.FXForecast{Window: window, Status: "unavailable", Reason: "年度换汇预测暂不可用", Currencies: []string{}, Months: []service.FXMonth{}, Summaries: []service.FXCurrencySummary{}, Rates: []service.FXRateInfo{}})
 		return
 	}
 	result, err := a.app.FX.Forecast(currentUserID(c), c.Param("planID"), window, scenarios)

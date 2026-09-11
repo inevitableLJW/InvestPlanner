@@ -35,9 +35,9 @@ func main() {
 	store := repository.New(db)
 	app := service.New(store, cfg.SessionTTL)
 	app.QDII = &service.QDIIService{Store: store, Now: time.Now, FreshFor: 24 * time.Hour}
-	app.FX = &service.FXService{Store: store, Now: time.Now, Enabled: cfg.FXAssistantEnabled, QuotaUSD: 50000, QuotaSource: "https://www.safe.gov.cn/tianjin/2026/0706/3085.html", QuotaEffectiveDate: "2026-07-06"}
+	app.FX = &service.FXService{Store: store, Now: time.Now, Enabled: cfg.FXAssistantEnabled}
 	snapshots := &marketdata.SnapshotService{Store: store, Now: time.Now, FreshFor: map[string]time.Duration{"purchase_limit": 12 * time.Hour, "etf_quote": 15 * time.Minute, "fx_rate": 36 * time.Hour}}
-	collector := &marketdata.Collector{Store: store, Snapshots: snapshots, AKTools: marketdata.NewAKToolsClient(cfg.AKToolsBaseURL, 45*time.Second), Interval: 6 * time.Hour, Concurrency: 2, Now: time.Now}
+	collector := &marketdata.Collector{Store: store, Snapshots: snapshots, AKTools: marketdata.NewAKToolsClient(cfg.AKToolsBaseURL, 45*time.Second), PurchaseDetails: marketdata.NewEastMoneyPurchaseClient(), Interval: 6 * time.Hour, Concurrency: 2, Now: time.Now}
 	if cfg.TushareToken != "" {
 		collector.Tushare = marketdata.NewTushareClient(cfg.TushareToken, 5*time.Second)
 	}

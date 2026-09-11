@@ -78,7 +78,7 @@ func Load() (Config, error) {
 	if cfg.MarketDataProductionApproved, err = envBool("MARKET_DATA_PRODUCTION_APPROVED", false); err != nil {
 		return Config{}, err
 	}
-	if cfg.FXAssistantEnabled, err = envBool("FX_ASSISTANT_ENABLED", false); err != nil {
+	if cfg.FXAssistantEnabled, err = envBool("FX_ASSISTANT_ENABLED", true); err != nil {
 		return Config{}, err
 	}
 	if cfg.Environment == "production" && !cfg.MarketDataProductionApproved {

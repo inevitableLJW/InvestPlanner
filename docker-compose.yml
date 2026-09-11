@@ -1,4 +1,4 @@
-name: invest-planner
+name: investplanner
 
 services:
   aktools:
@@ -24,7 +24,7 @@ services:
       MYSQL_RANDOM_ROOT_PASSWORD: "yes"
       TZ: ${TZ:-Asia/Shanghai}
     volumes:
-      - ${MYSQL_DATA_DIR:-./data/mysql}:/var/lib/mysql
+      - mysql-data:/var/lib/mysql
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u\"$${MYSQL_USER}\" -p\"$${MYSQL_PASSWORD}\" --silent"]
       interval: 10s
@@ -50,7 +50,7 @@ services:
       AKTOOLS_BASE_URL: http://aktools:8080
       TUSHARE_TOKEN: ${TUSHARE_TOKEN:-}
       MARKET_DATA_PRODUCTION_APPROVED: ${MARKET_DATA_PRODUCTION_APPROVED:-false}
-      FX_ASSISTANT_ENABLED: ${FX_ASSISTANT_ENABLED:-false}
+      FX_ASSISTANT_ENABLED: ${FX_ASSISTANT_ENABLED:-true}
       TZ: ${TZ:-Asia/Shanghai}
     depends_on:
       mysql:
@@ -93,3 +93,7 @@ networks:
     internal: true
   frontend:
   egress:
+
+volumes:
+  mysql-data:
+    name: investplanner-mysql-data

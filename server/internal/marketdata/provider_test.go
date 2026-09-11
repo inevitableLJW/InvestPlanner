@@ -30,6 +30,59 @@ func TestAKToolsCatalogAndFieldContract(t *testing.T) {
 	}
 }
 
+func TestFundCumulativeNAVRetriesRepeatedTransientFailures(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls < 6 {
+			http.Error(w, "temporary upstream failure", http.StatusBadGateway)
+			return
+		}
+		_, _ = w.Write([]byte(`[{"净值日期":"2026-09-03T00:00:00.000","累计净值":1.20},{"净值日期":"2026-09-04T00:00:00.000","累计净值":1.21}]`))
+	}))
+	defer server.Close()
+
+	client := NewAKToolsClient(server.URL, 5*time.Second)
+	series, err := client.FundCumulativeNAV(context.Background(), "513100")
+	if err != nil || calls != 6 || series.Basis != "cumulative_nav_proxy" || len(series.Points) != 2 {
+		t.Fatalf("calls=%d series=%+v err=%v", calls, series, err)
+	}
+}
+
+func TestFundCumulativeNAVRetriesTemporaryEmptyResponses(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls < 3 {
+			_, _ = w.Write([]byte(`[]`))
+			return
+		}
+		_, _ = w.Write([]byte(`[{"净值日期":"2026-09-03T00:00:00.000","累计净值":1.20},{"净值日期":"2026-09-04T00:00:00.000","累计净值":1.21}]`))
+	}))
+	defer server.Close()
+
+	client := NewAKToolsClient(server.URL, 5*time.Second)
+	series, err := client.FundCumulativeNAV(context.Background(), "513100")
+	if err != nil || calls != 3 || len(series.Points) != 2 {
+		t.Fatalf("calls=%d series=%+v err=%v", calls, series, err)
+	}
+}
+
+func TestFundCumulativeNAVSkipsNullObservationsWithoutZeroFilling(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[{"净值日期":"2020-12-30T00:00:00.000","累计净值":1.20},{"净值日期":"2020-12-31T00:00:00.000","累计净值":null},{"净值日期":"2021-01-04T00:00:00.000","累计净值":1.21}]`))
+	}))
+	defer server.Close()
+
+	series, err := NewAKToolsClient(server.URL, time.Second).FundCumulativeNAV(context.Background(), "513100")
+	if err != nil || len(series.Points) != 2 {
+		t.Fatalf("series=%+v err=%v", series, err)
+	}
+	if series.Points[0].Value != 1.20 || series.Points[1].Value != 1.21 {
+		t.Fatalf("missing observation was not omitted: %+v", series.Points)
+	}
+}
+
 func TestAKToolsETFUsesRealNameAndIOPVFields(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`[{"代码":"513100","名称":"纳指ETF国泰","最新价":3,"IOPV实时估值":2,"基金折价率":-50}]`))
@@ -64,7 +117,7 @@ func TestAKToolsPurchaseUsesPinnedRealFieldNames(t *testing.T) {
 	if err != nil || len(items) != 1 {
 		t.Fatalf("items=%+v err=%v", items, err)
 	}
-	if items[0].Name == "" || items[0].ShareClass != "C" || items[0].Venue != "otc" || items[0].Status != "open" || items[0].MinimumCents == nil || *items[0].MinimumCents != 500 || items[0].DailyLimitCents == nil || *items[0].DailyLimitCents != 500 {
+	if items[0].Name == "" || items[0].ShareClass != "C" || items[0].Venue != "otc" || items[0].Status != "limited" || items[0].MinimumCents == nil || *items[0].MinimumCents != 500 || items[0].DailyLimitCents == nil || *items[0].DailyLimitCents != 500 {
 		t.Fatalf("unexpected normalized purchase: %+v", items[0])
 	}
 }
@@ -126,6 +179,33 @@ func TestAKToolsFreeTrackingProxyContracts(t *testing.T) {
 	combined, err := CNYAdjustedBenchmark(etf, fx)
 	if err != nil || combined.Basis != "adjusted_close_cny_proxy" || combined.Points[1].Value != 708.01 {
 		t.Fatalf("combined=%+v err=%v", combined, err)
+	}
+}
+
+func TestAKToolsSAFEReferenceRatesUseLatestUSDAndHKD(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/api/public/currency_boc_safe") {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`[
+			{"日期":"2026-08-20T00:00:00.000","美元":700,"港元":90},
+			{"日期":"2026-08-21T00:00:00.000","美元":701,"港元":91.23}
+		]`))
+	}))
+	defer server.Close()
+	client := NewAKToolsClient(server.URL, time.Second)
+	client.Now = func() time.Time { return time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC) }
+	rates, err := client.SAFEReferenceRates(context.Background())
+	if err != nil || len(rates) != 2 {
+		t.Fatalf("rates=%+v err=%v", rates, err)
+	}
+	if rates[0].Currency != "USD" || rates[0].CNYPerUnit != 7.01 || rates[1].Currency != "HKD" || rates[1].CNYPerUnit != .9123 {
+		t.Fatalf("unexpected rates: %+v", rates)
+	}
+	for _, rate := range rates {
+		if rate.Meta.Provider != "safe" || rate.Meta.SourceURL != SAFEReferenceRateSource || rate.Meta.ObservedAt.Format("2006-01-02") != "2026-08-21" {
+			t.Fatalf("unexpected metadata: %+v", rate.Meta)
+		}
 	}
 }
 
