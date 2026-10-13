@@ -182,7 +182,9 @@ h2, h3 { margin-bottom: .65rem; }
 .allocation-track { height: 7px; border-radius: 99px; overflow: hidden; background: #edf2fa; }
 .allocation-track i { height: 100%; display: block; border-radius: inherit; background: linear-gradient(90deg, var(--primary), #75b5ff); }
 .allocation-row strong { text-align: right; font-size: .83rem; }
-.target-icon { width: 36px; height: 36px; flex: 0 0 auto; border-radius: 11px; display: grid; place-items: center; color: var(--primary); background: var(--primary-soft); font-size: .82rem; font-weight: 800; }
+.target-icon { width: 36px; height: 36px; flex: 0 0 auto; border-radius: 11px; display: grid; place-items: center; padding: 2px; color: var(--primary); background: color-mix(in srgb, var(--primary) 8%, var(--surface)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 12%, transparent); }
+.target-icon img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.target-icon svg { width: 66%; height: 66%; }
 .soft-empty { min-height: 150px; display: grid; place-items: center; align-content: center; gap: 7px; color: var(--muted); text-align: center; }
 .soft-empty p { margin: 0; }
 

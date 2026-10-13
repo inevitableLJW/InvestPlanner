@@ -1,6 +1,7 @@
-import type { CSSProperties, ReactNode } from 'react'
+import { useState, type CSSProperties, type ReactNode } from 'react'
 import { siAlipay, siMeituan, siWechat } from 'simple-icons'
 import { getExpenseIconMeta, type ExpenseIconKind } from '../lib/expenseIcons'
+import { getTargetIconKey, targetIconPath } from '../lib/targetIcons'
 
 function Svg({ children }: { children: ReactNode }) {
   return <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">{children}</svg>
@@ -25,7 +26,15 @@ export function AppIcon({ name, size = 'md' }: { name: string; size?: 'sm' | 'md
 }
 
 export function TargetIcon({ name }: { name: string }) {
-  const safeName = name.trim()
-  const text = safeName === '现金' ? '¥' : safeName.includes('债券') ? '债' : safeName.includes('纳斯达克') || safeName.includes('纳指') ? 'N' : safeName.includes('标普') ? 'S' : safeName.includes('港股') ? 'H' : safeName.includes('美股') ? 'U' : safeName.includes('A股') || safeName.includes('沪深') ? 'A' : safeName.includes('红利') ? '红' : '投'
-  return <span className="target-icon" aria-hidden="true">{text}</span>
+  const iconKey = getTargetIconKey(name)
+  return <TargetIconImage key={iconKey} iconKey={iconKey} />
+}
+
+function TargetIconImage({ iconKey }: { iconKey: ReturnType<typeof getTargetIconKey> }) {
+  const [failed, setFailed] = useState(false)
+  return <span className="target-icon" data-target-icon={iconKey} aria-hidden="true">
+    {failed
+      ? <Svg><rect x="4" y="4" width="6" height="6" rx="2" fill="currentColor"/><rect x="14" y="4" width="6" height="6" rx="2" fill="currentColor"/><rect x="4" y="14" width="6" height="6" rx="2" fill="currentColor"/><rect x="14" y="14" width="6" height="6" rx="2" fill="currentColor"/></Svg>
+      : <img src={targetIconPath(iconKey)} alt="" width="128" height="128" decoding="async" onError={() => setFailed(true)} />}
+  </span>
 }
