@@ -27,3 +27,6 @@ Thumbs.db
 # Runtime
 *.log
 data/
+
+# Local build caches
+.tmp/

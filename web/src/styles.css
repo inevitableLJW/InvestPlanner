@@ -296,6 +296,7 @@ select { cursor: pointer; }
 .app-icon.md { width: 36px; height: 36px; }
 .app-icon.lg { width: 42px; height: 42px; }
 .app-icon svg { width: 62%; height: 62%; overflow: visible; }
+.app-icon img { display: block; width: 100%; height: 100%; object-fit: contain; border-radius: inherit; }
 .app-icon-letter { font-size: 1rem; font-weight: 800; }
 .app-icon.lg .app-icon-letter { font-size: 1.15rem; }
 .app-icon-word { display: inline-flex; align-items: center; justify-content: center; font-weight: 900; letter-spacing: -.12em; line-height: 1; }
